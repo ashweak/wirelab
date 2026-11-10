@@ -15,7 +15,7 @@ import {
   type RoomKind,
   type V3,
 } from "./parts";
-import { chainOrder, chainSegments, segLength } from "./wiring";
+import { PANEL_KEY, chainOrder, chainSegments, segLength } from "./wiring";
 
 export * from "./parts";
 
@@ -205,9 +205,10 @@ export function toProject(doc: EditorDoc): Result<{ project: Project }> {
     );
     const segments = chainSegments(
       panel.position,
-      ordered.map((p) => ({ position: p.position, va: partVA(p), face: p.face })),
+      ordered.map((p) => ({ id: p.id, position: p.position, va: partVA(p), face: p.face })),
       ceiling,
       panelFace,
+      { panelId: PANEL_KEY, routes: doc.routes },
     );
     return {
       id: `C${i + 1}`,

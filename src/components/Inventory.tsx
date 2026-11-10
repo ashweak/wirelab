@@ -6,6 +6,10 @@ import { CEILING_COLOR, itemInfo, type InvItem } from "./ItemPreview";
 import { FURNITURE } from "@/editor/interior";
 import { FLOOR_MATERIALS, WALL_MATERIALS } from "@/editor/construction";
 import { PART_INFO } from "@/editor/parts";
+import { useThumb } from "./Thumbnails";
+
+const ThumbnailFactory = dynamic(() => import("./Thumbnails"), { ssr: false });
+export { ThumbnailFactory };
 
 const ItemPreview = dynamic(() => import("./ItemPreview"), { ssr: false });
 
@@ -36,6 +40,13 @@ function IsoBlock({ w, d, h, color }: { w: number; d: number; h: number; color: 
       <polygon points={top} fill={shade(color, 1.08)} />
     </svg>
   );
+}
+
+/** Rendered icon of the real model, with the flat swatch while it is being drawn. */
+function Icon({ item }: { item: InvItem }) {
+  const src = useThumb(item);
+  // eslint-disable-next-line @next/next/no-img-element
+  return src ? <img src={src} alt="" draggable={false} className="h-[38px] w-[38px] object-contain drop-shadow-[1px_2px_0_rgba(0,0,0,0.35)]" /> : <Swatch item={item} />;
 }
 
 function Swatch({ item }: { item: InvItem }) {
@@ -194,7 +205,7 @@ export function SlotGrid({
             }`}
             {...bind(item)}
           >
-            <Swatch item={item} />
+            <Icon item={item} />
           </button>
         );
       })}

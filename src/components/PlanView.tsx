@@ -55,6 +55,11 @@ interface Props {
     onClick: (raw: Pt, k: number, shift: boolean) => void;
     onWindow: (a: Pt, b: Pt, crossing: boolean, shift: boolean) => void;
   };
+  /** Hand routing of conduit (circuit plan). */
+  route?: { key: string; bends: V3[]; bend: number | null } | null;
+  onRouteDown?: (key: string, at: V3) => void;
+  onRouteDouble?: (key: string, at: V3) => void;
+  onBendDown?: (i: number) => void;
   /** Static render for printing: fixed view, no interaction. */
   print?: { k: number; ox: number; oy: number; w: number; h: number; sheet: string; scale: string; date: string };
 }
@@ -494,9 +499,68 @@ export default function PlanView(p: Props) {
   const wiring = circuitMode
     ? p.circuits.map((c) => {
         const col = colorFor(c.id);
-        const lines = c.paths.map((path, i) => {
+        const lines = c.paths.map((raw, i) => {
+          const key = c.keys?.[i];
+          const sel = !!key && p.route?.key === key;
+          const path = sel ? [raw[0], ...p.route!.bends, raw[raw.length - 1]] : raw;
           const pts = path.map((v: V3) => [X(v[0]), Y(v[2])]).filter((q, j, a) => j === 0 || q[0] !== a[j - 1][0] || q[1] !== a[j - 1][1]);
-          return <polyline key={i} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={col} strokeWidth={1.6} strokeLinejoin="round" opacity={0.9} />;
+          const str = pts.map((q) => q.join(",")).join(" ");
+          const editable = key && p.onRouteDown && !p.print && !p.cad?.active;
+          const at = (e: React.MouseEvent): V3 => {
+            const w = toWorld(e.clientX, e.clientY);
+            return [w[0], 0, w[1]];
+          };
+          return (
+            <g key={i}>
+              <polyline
+                points={str}
+                fill="none"
+                stroke={sel ? AMBER : col}
+                strokeWidth={sel ? 2.6 : 1.6}
+                strokeDasharray={c.custom?.[i] && !sel ? "6 2" : undefined}
+                strokeLinejoin="round"
+                opacity={0.9}
+              />
+              {editable && (
+                <polyline
+                  points={str}
+                  fill="none"
+                  stroke="transparent"
+                  strokeWidth={10}
+                  style={{ cursor: "pointer", pointerEvents: "stroke" }}
+                  onPointerDown={(e) => {
+                    if (e.button !== 0) return;
+                    e.stopPropagation();
+                    p.onRouteDown!(key, at(e));
+                  }}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    p.onRouteDouble?.(key, at(e));
+                  }}
+                />
+              )}
+              {sel &&
+                !p.print &&
+                p.route!.bends.map((b, j) => (
+                  <rect
+                    key={j}
+                    x={X(b[0]) - 5}
+                    y={Y(b[2]) - 5}
+                    width={10}
+                    height={10}
+                    fill={p.route!.bend === j ? "#fff" : AMBER}
+                    stroke={INK}
+                    strokeWidth={1}
+                    style={{ cursor: "move" }}
+                    onPointerDown={(e) => {
+                      if (e.button !== 0) return;
+                      e.stopPropagation();
+                      p.onBendDown?.(j);
+                    }}
+                  />
+                ))}
+            </g>
+          );
         });
         const firstDevice = c.devices[0]?.position;
         return (

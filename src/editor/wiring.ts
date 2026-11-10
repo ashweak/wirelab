@@ -42,6 +42,17 @@ export function segPath(a: V3, b: V3, ceiling = CEILING, fa?: number, fb?: numbe
   return [a, [a[0], y, a[2]], [b[0], y, a[2]], [b[0], y, b[2]], b];
 }
 
+export const PANEL_KEY = "panel";
+export const routeKey = (from: string, to: string) => `${from}>${to}`;
+export const polyLength = (pts: V3[]) =>
+  pts.reduce((s, p, i) => (i ? s + Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1], p[2] - pts[i - 1][2]) : 0), 0);
+
+/** Route options shared by the chain helpers. */
+export interface RouteOpts {
+  panelId?: string;
+  routes?: Record<string, V3[]>;
+}
+
 /** Length used for wire and voltage drop (measured to the ceiling line). */
 export function segLength(a: V3, b: V3, ceiling = CEILING, fa?: number, fb?: number): number {
   const flat = Math.abs(a[0] - b[0]) + Math.abs(a[2] - b[2]);
@@ -73,21 +84,46 @@ export function chainOrder<T extends { position: V3; seq?: number; face?: number
   return out;
 }
 
+/** One hop of a chain: its key, polyline and whether the user drew it. */
+export interface Hop {
+  key: string;
+  path: V3[];
+  custom: boolean;
+  lengthM: number;
+}
+
+export function chainHops(
+  panel: V3,
+  ordered: { id?: string; position: V3; face?: number }[],
+  ceiling = CEILING,
+  panelFace?: number,
+  opts: RouteOpts = {},
+): Hop[] {
+  return ordered.map((p, i) => {
+    const prev = i === 0 ? null : ordered[i - 1];
+    const a = prev ? prev.position : panel;
+    const key = routeKey(prev ? (prev.id ?? `#${i - 1}`) : (opts.panelId ?? PANEL_KEY), p.id ?? `#${i}`);
+    const wp = opts.routes?.[key];
+    if (wp) {
+      const path = [a, ...wp, p.position];
+      return { key, path, custom: true, lengthM: polyLength(path) };
+    }
+    const fa = prev ? prev.face : panelFace;
+    return { key, path: segPath(a, p.position, ceiling, fa, p.face), custom: false, lengthM: segLength(a, p.position, ceiling, fa, p.face) };
+  });
+}
+
 /** Segments for the engine: length of each hop and the load still downstream of it. */
 export function chainSegments(
   panel: V3,
-  ordered: { position: V3; va: number; face?: number }[],
+  ordered: { id?: string; position: V3; va: number; face?: number }[],
   ceiling = CEILING,
   panelFace?: number,
+  opts: RouteOpts = {},
 ) {
+  const hops = chainHops(panel, ordered, ceiling, panelFace, opts);
   return ordered.map((p, i) => ({
-    lengthM: segLength(
-      i === 0 ? panel : ordered[i - 1].position,
-      p.position,
-      ceiling,
-      i === 0 ? panelFace : ordered[i - 1].face,
-      p.face,
-    ),
+    lengthM: hops[i].lengthM,
     downstreamVA: ordered.slice(i).reduce((s, x) => s + x.va, 0),
   }));
 }
@@ -95,20 +131,13 @@ export function chainSegments(
 /** Polylines for drawing a chained circuit. */
 export function chainPaths(
   panel: V3,
-  ordered: { position?: V3; face?: number }[],
+  ordered: { id?: string; position?: V3; face?: number }[],
   ceiling = CEILING,
   panelFace?: number,
+  opts: RouteOpts = {},
 ): V3[][] {
-  const pts = ordered.filter((p) => p.position) as { position: V3; face?: number }[];
-  return pts.map((p, i) =>
-    segPath(
-      i === 0 ? panel : pts[i - 1].position,
-      p.position,
-      ceiling,
-      i === 0 ? panelFace : pts[i - 1].face,
-      p.face,
-    ),
-  );
+  const pts = ordered.filter((p) => p.position) as { id?: string; position: V3; face?: number }[];
+  return chainHops(panel, pts, ceiling, panelFace, opts).map((h) => h.path);
 }
 
 /** Ceiling points where a conduit drops down a wall to a device (junction boxes). */
@@ -182,7 +211,13 @@ export function materials(doc: EditorDoc): MaterialLine[] {
     };
     const pf = face(panel.id, panel.position);
     drops += dropPoints(
-      chainPaths(panel.position, c.parts.map((p) => ({ position: p.position, face: face(p.id, p.position!) })), ceil, pf),
+      chainPaths(
+        panel.position,
+        c.parts.map((p) => ({ id: p.id, position: p.position, face: face(p.id, p.position!) })),
+        ceil,
+        pf,
+        { panelId: PANEL_KEY, routes: doc.routes },
+      ),
       ceil,
     ).length;
     breakers.set(r.breakerA, (breakers.get(r.breakerA) ?? 0) + 1);

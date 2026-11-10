@@ -4,7 +4,7 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import { CanvasTexture, RepeatWrapping, SRGBColorSpace, type Group } from "three";
 import { FurnitureMesh } from "./Furniture3D";
-import { Device } from "./HouseScene";
+import { Device, PanelBoard } from "./HouseScene";
 import { floorTexture } from "./textures";
 import { FURNITURE } from "@/editor/interior";
 import { CEILING_MATERIALS, FLOOR_MATERIALS, WALL_MATERIALS } from "@/editor/construction";
@@ -85,7 +85,7 @@ export function itemSize(item: InvItem): [number, number, number] {
   return [1, 0.1, 1];
 }
 
-function Subject({ item }: { item: InvItem }) {
+export function Subject({ item }: { item: InvItem }) {
   const wallTex = useMemo(() => {
     if (item.kind !== "wall") return null;
     const m = WALL_MATERIALS.find((x) => x.id === item.id)!;
@@ -103,8 +103,14 @@ function Subject({ item }: { item: InvItem }) {
       return <FurnitureMesh f={f} selected={false} />;
     }
     case "part":
+      if (item.id === "panel")
+        return (
+          <group position={[0, 0.3, -0.05]}>
+            <PanelBoard />
+          </group>
+        );
       return (
-        <Device d={{ id: "preview", type: item.id, position: [0, 0.25, 0], facing: Math.PI / 2 }} tint="#f59e0b" on opacity={1} />
+        <Device d={{ id: "preview", type: item.id, position: [0, 0.25, 0], facing: Math.PI / 4 }} tint="#d9d4c7" on={false} opacity={1} />
       );
     case "wall": {
       const m = WALL_MATERIALS.find((x) => x.id === item.id)!;
@@ -135,6 +141,19 @@ function Subject({ item }: { item: InvItem }) {
         </mesh>
       );
   }
+}
+
+/** The item scaled into a ~1.6 m box and centred on the origin. */
+export function Staged({ item }: { item: InvItem }) {
+  const [w, h, d] = itemSize(item);
+  const s = Math.max(w, h, d, 0.3);
+  return (
+    <group scale={1.6 / s}>
+      <group position={[0, -h / 2, 0]}>
+        <Subject item={item} />
+      </group>
+    </group>
+  );
 }
 
 function Turntable({ item }: { item: InvItem }) {

@@ -3,7 +3,7 @@
 import { Canvas, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Line, OrbitControls } from "@react-three/drei";
 import { useEffect, useMemo, useRef, type MutableRefObject } from "react";
-import { BoxGeometry as BoxGeometryImpl, CanvasTexture, Plane, Raycaster, SRGBColorSpace, Vector2, Vector3 } from "three";
+import { BoxGeometry as BoxGeometryImpl, CanvasTexture, Plane, Quaternion, Raycaster, SRGBColorSpace, Vector2, Vector3 } from "three";
 import type { OrbitControls as OrbitImpl } from "three-stdlib";
 import { CEILING } from "@/data/goldenHouse";
 import { defaultFinish, FURNITURE } from "@/editor/interior";
@@ -48,6 +48,13 @@ export interface EditorHooks {
   onPartClick?: (id: string) => void;
   preview?: { x: number; z: number; w: number; d: number; ok: boolean } | null;
   ghost?: SceneDevice | null;
+  /** Hand routing: the selected conduit run and its bend points. */
+  route?: { key: string; bends: V3[]; bend: number | null } | null;
+  onRouteDown?: (key: string, at: V3) => void;
+  onRouteDouble?: (key: string, at: V3) => void;
+  onBendDown?: (i: number) => void;
+  /** Height of the plane a drag moves on (0 = floor). */
+  dragY?: number;
 }
 
 interface Props {
@@ -119,26 +126,101 @@ function Label({
   );
 }
 
-/** Axis-aligned conduit: one cylinder per straight run, a ball at each bend. */
-function Conduit({ path, color, opacity, glow }: { path: V3[]; color: string; opacity: number; glow: number }) {
+/** Residential panelboard: steel enclosure, dead-front with two rows of breakers. */
+export function PanelBoard() {
+  const breakers = [];
+  for (let r = 0; r < 2; r++)
+    for (let i = 0; i < 6; i++)
+      breakers.push(
+        <mesh key={`${r}-${i}`} position={[r ? 0.06 : -0.06, 0.15 - i * 0.055, 0.112]}>
+          <boxGeometry args={[0.09, 0.045, 0.02]} />
+          <meshStandardMaterial color="#1f2328" roughness={0.6} />
+        </mesh>,
+      );
+  return (
+    <group>
+      <mesh position={[0, 0, 0.05]}>
+        <boxGeometry args={[0.42, 0.55, 0.1]} />
+        <meshStandardMaterial color="#9aa5b1" metalness={0.5} roughness={0.35} />
+      </mesh>
+      <mesh position={[0, 0, 0.102]}>
+        <boxGeometry args={[0.36, 0.48, 0.005]} />
+        <meshStandardMaterial color="#c3ccd5" metalness={0.4} roughness={0.4} />
+      </mesh>
+      {/* main breaker */}
+      <mesh position={[0, 0.21, 0.114]}>
+        <boxGeometry args={[0.16, 0.05, 0.024]} />
+        <meshStandardMaterial color="#111418" roughness={0.5} />
+      </mesh>
+      {breakers}
+      {/* door latch and label */}
+      <mesh position={[0.165, -0.05, 0.11]}>
+        <boxGeometry args={[0.015, 0.06, 0.015]} />
+        <meshStandardMaterial color="#5b636c" metalness={0.7} roughness={0.3} />
+      </mesh>
+      <mesh position={[0, -0.21, 0.106]}>
+        <boxGeometry args={[0.14, 0.03, 0.002]} />
+        <meshStandardMaterial color="#facc15" />
+      </mesh>
+    </group>
+  );
+}
+
+const UP = new Vector3(0, 1, 0);
+
+/** Conduit: one tube per straight run (any direction), a ball at each bend. */
+function Conduit({
+  path,
+  color,
+  opacity,
+  glow,
+  pick,
+}: {
+  path: V3[];
+  color: string;
+  opacity: number;
+  glow: number;
+  /** Makes the run clickable (fat invisible hit tubes). */
+  pick?: { down: (at: V3) => void; double: (at: V3) => void };
+}) {
   const parts = [];
   for (let i = 1; i < path.length; i++) {
-    const a = path[i - 1];
-    const b = path[i];
-    const len = Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+    const a = new Vector3(...path[i - 1]);
+    const b = new Vector3(...path[i]);
+    const dir = b.clone().sub(a);
+    const len = dir.length();
     if (len < 1e-4) continue;
-    const mid: V3 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
-    const rot: V3 =
-      Math.abs(a[0] - b[0]) > 1e-4 ? [0, 0, Math.PI / 2] : Math.abs(a[2] - b[2]) > 1e-4 ? [Math.PI / 2, 0, 0] : [0, 0, 0];
+    const mid = a.clone().add(b).multiplyScalar(0.5);
+    const q = new Quaternion().setFromUnitVectors(UP, dir.normalize());
     parts.push(
-      <mesh key={`s${i}`} position={mid} rotation={rot} raycast={() => null}>
+      <mesh key={`s${i}`} position={mid} quaternion={q} raycast={() => null}>
         <cylinderGeometry args={[CONDUIT_R, CONDUIT_R, len, 8]} />
         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={glow} transparent opacity={opacity} />
       </mesh>,
     );
+    if (pick)
+      parts.push(
+        <mesh
+          key={`h${i}`}
+          position={mid}
+          quaternion={q}
+          visible={false}
+          onPointerDown={(e: ThreeEvent<PointerEvent>) => {
+            if (e.button !== 0) return;
+            e.stopPropagation();
+            pick.down([e.point.x, e.point.y, e.point.z]);
+          }}
+          onDoubleClick={(e: ThreeEvent<MouseEvent>) => {
+            e.stopPropagation();
+            pick.double([e.point.x, e.point.y, e.point.z]);
+          }}
+        >
+          <cylinderGeometry args={[0.07, 0.07, len, 6]} />
+        </mesh>,
+      );
     if (i < path.length - 1)
       parts.push(
-        <mesh key={`b${i}`} position={b} raycast={() => null}>
+        <mesh key={`b${i}`} position={path[i]} raycast={() => null}>
           <sphereGeometry args={[CONDUIT_R * 1.4, 8, 8]} />
           <meshStandardMaterial color={color} transparent opacity={opacity} />
         </mesh>,
@@ -610,10 +692,11 @@ function Interaction({
     const ray = new Raycaster();
     const plane = new Plane(new Vector3(0, 1, 0), 0);
     const hit = new Vector3();
-    return (cx: number, cy: number): [number, number] | null => {
+    return (cx: number, cy: number, y = 0): [number, number] | null => {
       const rect = gl.domElement.getBoundingClientRect();
       const ndc = new Vector2(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1);
       ray.setFromCamera(ndc, camera);
+      plane.constant = -y;
       return ray.ray.intersectPlane(plane, hit) ? [hit.x, hit.z] : null;
     };
   }, [camera, gl]);
@@ -650,6 +733,7 @@ function Interaction({
   }, [editor?.apiRef, floorAt, camera, controls, gl, scene]);
 
   const dragging = editor?.dragging;
+  const dragY = editor?.dragY ?? 0;
   const onMove = editor?.onDragMove;
   const onEnd = editor?.onDragEnd;
   useEffect(() => {
@@ -659,7 +743,7 @@ function Interaction({
     }
     if (controls.current) controls.current.enabled = false;
     const move = (e: PointerEvent) => {
-      const p = floorAt(e.clientX, e.clientY);
+      const p = floorAt(e.clientX, e.clientY, dragY);
       if (p) onMove?.(p[0], p[1]);
     };
     const up = () => onEnd?.();
@@ -669,7 +753,7 @@ function Interaction({
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
-  }, [dragging, onMove, onEnd, floorAt, controls]);
+  }, [dragging, onMove, onEnd, floorAt, controls, dragY]);
 
   return null;
 }
@@ -830,14 +914,7 @@ export default function HouseScene({
 
       {panel && !above(panel) && (
         <group position={panel.position} rotation={[0, panel.facing, 0]}>
-          <mesh position={[0, 0, 0.05]}>
-            <boxGeometry args={[0.42, 0.55, 0.1]} />
-            <meshStandardMaterial color="#9aa5b1" metalness={0.5} roughness={0.35} />
-          </mesh>
-          <mesh position={[0, 0, 0.102]}>
-            <boxGeometry args={[0.36, 0.48, 0.005]} />
-            <meshStandardMaterial color="#b8c2cc" metalness={0.4} roughness={0.4} />
-          </mesh>
+          <PanelBoard />
           <mesh
             visible={false}
             onPointerDown={
@@ -956,9 +1033,41 @@ export default function HouseScene({
           const opacity = dim ? 0.12 : 1;
           return (
             <group key={c.id}>
-              {wiringVisible && c.paths.map((p, i) => (
-                <Conduit key={i} path={p} color={pipe} opacity={opacity} glow={bad && !dim ? 0.5 : 0.08} />
-              ))}
+              {wiringVisible &&
+                c.paths.map((p, i) => {
+                  const key = c.keys?.[i];
+                  const sel = !!key && editor?.route?.key === key;
+                  return (
+                    <Conduit
+                      key={i}
+                      path={sel ? [p[0], ...editor!.route!.bends, p[p.length - 1]] : p}
+                      color={sel ? "#f5b942" : pipe}
+                      opacity={opacity}
+                      glow={sel ? 0.6 : bad && !dim ? 0.5 : 0.08}
+                      pick={
+                        key && editor?.onRouteDown && mode === "edit"
+                          ? { down: (at) => editor.onRouteDown!(key, at), double: (at) => editor.onRouteDouble?.(key, at) }
+                          : undefined
+                      }
+                    />
+                  );
+                })}
+              {editor?.route &&
+                c.keys?.includes(editor.route.key) &&
+                editor.route.bends.map((b, i) => (
+                  <mesh
+                    key={`bend${i}`}
+                    position={b}
+                    onPointerDown={(e: ThreeEvent<PointerEvent>) => {
+                      if (e.button !== 0) return;
+                      e.stopPropagation();
+                      editor.onBendDown?.(i);
+                    }}
+                  >
+                    <sphereGeometry args={[editor.route!.bend === i ? 0.11 : 0.08, 16, 16]} />
+                    <meshStandardMaterial color={editor.route!.bend === i ? "#ffffff" : "#f5b942"} emissive="#f5b942" emissiveIntensity={0.4} depthTest={false} transparent />
+                  </mesh>
+                ))}
               {wiringVisible && c.drops.map((p, i) => (
                 <mesh key={`j${i}`} position={p} raycast={() => null}>
                   <cylinderGeometry args={[0.07, 0.07, 0.05, 8]} />

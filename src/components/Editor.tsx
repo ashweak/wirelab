@@ -33,7 +33,8 @@ import {
   setPartHeight,
   updateRoom,
 } from "@/editor/transform";
-import { designChecks, materials } from "@/editor/wiring";
+import { designChecks, materials, polyLength } from "@/editor/wiring";
+import { addBend, bendsOf, moveBend, pruneRoutes, removeBend, resetRoute } from "@/editor/routes";
 import {
   CEILING_RANGE,
   FLOOR_KINDS,
@@ -53,7 +54,7 @@ import {
   setFurnitureColor,
   setRoomMaterials,
 } from "@/editor/interior";
-import { PART_TYPES, type Draft, type FloorKind, type FurnitureType } from "@/editor/parts";
+import { PART_TYPES, type Draft, type FloorKind, type FurnitureType, type V3 } from "@/editor/parts";
 import { ChecksView, EstimateView, H2, MaterialsTable, ScheduleTable } from "./ScheduleView";
 import { CEILING_MATERIALS, FLOOR_MATERIALS, WALL_MATERIALS, WALL_OF, estimate } from "@/editor/construction";
 import type { Corner, SceneApi, ViewMode, ViewName } from "./HouseScene";
@@ -64,7 +65,7 @@ import ErrorBoundary from "./ErrorBoundary";
 import PdfDialog from "./PdfExport";
 import ProjectsDialog from "./ProjectsDialog";
 import * as store from "@/store/projects";
-import { SlotGrid, itemLabel, useItemPreview } from "./Inventory";
+import { SlotGrid, ThumbnailFactory, itemLabel, useItemPreview } from "./Inventory";
 import type { InvItem } from "./ItemPreview";
 import {
   DEFAULT_LAYERS,
@@ -89,7 +90,8 @@ type Drag =
   | { kind: "part"; id: string; start: [number, number]; origin: EditorDoc; moved: boolean }
   | { kind: "furniture"; id: string; start: [number, number]; origin: EditorDoc; moved: boolean }
   | { kind: "resize"; id: string; corner: Corner; origin: EditorDoc; moved: boolean }
-  | { kind: "draw"; start: [number, number] };
+  | { kind: "draw"; start: [number, number] }
+  | { kind: "bend"; key: string; i: number; y: number; path: V3[]; origin: EditorDoc; moved: boolean };
 
 const EMPTY: EditorDoc = { rooms: [], parts: [], feederRunM: 10 };
 const MODEL_ICON: Record<string, string> = {
@@ -217,6 +219,7 @@ export default function Editor() {
   const [message, setMessage] = useState<{ text: string; bad: boolean } | null>(null);
   const [hover, setHover] = useState<[number, number] | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [routeSel, setRouteSel] = useState<{ key: string; bend: number | null } | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
   const [view, setView] = useState<ViewMode>("real");
   const [clipboard, setClipboard] = useState<Selection>(null);
@@ -407,10 +410,122 @@ export default function Editor() {
   );
   const circuits = useMemo(
     () =>
-      built.ok && panel ? sceneCircuits(panel.position, built.project.circuits, shown.rooms, tags, ceiling) : [],
+      built.ok && panel ? sceneCircuits(panel.position, built.project.circuits, shown.rooms, tags, ceiling, shown.routes) : [],
     [built, panel, shown.rooms, tags, ceiling],
   );
   const extraChecks = useMemo(() => designChecks(doc), [doc]);
+  // ----- hand-routed conduit -----
+  const hopOf = (key: string) => {
+    for (const c of circuits) {
+      const i = c.keys.indexOf(key);
+      if (i >= 0) return { circuit: c.id, path: c.paths[i] };
+    }
+    return null;
+  };
+  const routeHop = routeSel ? hopOf(routeSel.key) : null;
+  const routeView = routeSel && routeHop ? { key: routeSel.key, bends: bendsOf(shown, routeSel.key, routeHop.path), bend: routeSel.bend } : null;
+  useEffect(() => {
+    // forget routes whose two devices are no longer chained together
+    if (!built.ok || !shown.routes || dragDoc) return;
+    const live = new Set(circuits.flatMap((c) => c.keys));
+    const pruned = pruneRoutes(doc, live);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (pruned !== doc) setDocState(pruned);
+    if (routeSel && !live.has(routeSel.key)) setRouteSel(null);
+  }, [circuits, built.ok, doc, shown.routes, dragDoc, routeSel]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (selection) setRouteSel(null);
+  }, [selection]);
+  const onRouteDown = (key: string) => {
+    setSelection(null);
+    setRouteSel({ key, bend: null });
+    const h = hopOf(key);
+    say(`Conduit on ${h?.circuit ?? "circuit"} selected — drag a bend, double-click the run to add one, Delete removes the selected bend`);
+  };
+  const onRouteDouble = (key: string, at: V3) => {
+    const h = hopOf(key);
+    if (!h) return;
+    const r = addBend(doc, key, h.path, at, viewKind !== "3d");
+    commit(r.doc);
+    setSelection(null);
+    setRouteSel({ key, bend: r.index });
+    say("Bend added — drag it where the conduit should run");
+  };
+  const onBendDown = (i: number) => {
+    if (!routeSel || !routeHop) return;
+    const bends = bendsOf(doc, routeSel.key, routeHop.path);
+    setRouteSel({ ...routeSel, bend: i });
+    setDrag({ kind: "bend", key: routeSel.key, i, y: bends[i][1], path: routeHop.path, origin: doc, moved: false });
+  };
+  const deleteBend = () => {
+    if (!routeSel || routeSel.bend === null || !routeHop) return;
+    commit(removeBend(doc, routeSel.key, routeHop.path, routeSel.bend));
+    setRouteSel({ ...routeSel, bend: null });
+    say("Bend removed");
+  };
+  const resetRouteSel = () => {
+    if (!routeSel) return;
+    commit(resetRoute(doc, routeSel.key));
+    setRouteSel({ ...routeSel, bend: null });
+    say("Conduit back to the automatic route");
+  };
+  const routeLen = routeView && routeHop ? polyLength([routeHop.path[0], ...routeView.bends, routeHop.path[routeHop.path.length - 1]]) : 0;
+  const routeBar = routeView ? (
+    <div className="flex items-center gap-1 rounded-lg border border-amber-400/70 bg-slate-950/95 px-1.5 py-1 text-[11px] text-slate-200 shadow-lg">
+      <span className="px-1 font-semibold text-amber-300">
+        Conduit {routeHop?.circuit} · {routeLen.toFixed(2)} m
+      </span>
+      <button
+        onClick={() => {
+          const h = routeHop!;
+          const full = [h.path[0], ...routeView.bends, h.path[h.path.length - 1]];
+          // add a bend in the middle of the longest run
+          let best = 1;
+          for (let i = 1; i < full.length; i++) if (polyLength([full[i - 1], full[i]]) > polyLength([full[best - 1], full[best]])) best = i;
+          const a = full[best - 1];
+          const b = full[best];
+          onRouteDouble(routeView.key, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]);
+        }}
+        className="rounded px-1.5 py-0.5 hover:bg-slate-800"
+      >
+        ＋ Bend
+      </button>
+      {routeView.bend !== null && (
+        <>
+          <label className="flex items-center gap-1 px-1 text-slate-400" title="Height of the selected bend above the floor">
+            h
+            <input
+              type="number"
+              step={0.05}
+              min={0}
+              max={ceiling}
+              value={routeView.bends[routeView.bend]?.[1].toFixed(2) ?? 0}
+              onChange={(e) => {
+                const v = Math.max(0, Math.min(ceiling, Number(e.target.value) || 0));
+                const b = routeView.bends[routeView.bend!];
+                commit(moveBend(doc, routeView.key, routeHop!.path, routeView.bend!, [b[0], v, b[2]]));
+              }}
+              className="w-14 rounded border border-slate-700 bg-slate-900 px-1 font-mono"
+              aria-label="Bend height (m)"
+            />
+          </label>
+          <button onClick={deleteBend} className="rounded px-1.5 py-0.5 hover:bg-slate-800" title="Delete bend (Del)">
+            − Bend
+          </button>
+        </>
+      )}
+      {shown.routes?.[routeView.key] && (
+        <button onClick={resetRouteSel} className="rounded px-1.5 py-0.5 hover:bg-slate-800">
+          ↺ Auto route
+        </button>
+      )}
+      <button onClick={() => setRouteSel(null)} className="rounded px-1.5 py-0.5 text-slate-500 hover:bg-slate-800" title="Close (Esc)">
+        ✕
+      </button>
+    </div>
+  ) : null;
+
   const bom = useMemo(() => materials(doc), [doc]);
   const est = useMemo(() => estimate(doc), [doc]);
   const wired = doc.parts.some((p) => p.seq !== undefined);
@@ -499,6 +614,7 @@ export default function Editor() {
     setDrag({ kind: "resize", id, corner, origin: doc, moved: false });
 
   const onFloorDown = (x: number, z: number) => {
+    setRouteSel(null);
     if (tool === "room") setDrag({ kind: "draw", start: [snap(x, step), snap(z, step)] });
   };
   const onFloorMove = (x: number, z: number) => {
@@ -545,7 +661,8 @@ export default function Editor() {
     setHover([x, z]);
     if (!drag || drag.kind === "draw") return;
     let r: { ok: true; doc: EditorDoc } | { ok: false; error: string };
-    if (drag.kind === "room") r = moveRoom(drag.origin, drag.id, x - drag.start[0], z - drag.start[1], step);
+    if (drag.kind === "bend") r = { ok: true, doc: moveBend(drag.origin, drag.key, drag.path, drag.i, [snap(x, 0.05), drag.y, snap(z, 0.05)]) };
+    else if (drag.kind === "room") r = moveRoom(drag.origin, drag.id, x - drag.start[0], z - drag.start[1], step);
     else if (drag.kind === "furniture") {
       const f = drag.origin.furniture!.find((q) => q.id === drag.id)!;
       r = moveFurniture(drag.origin, drag.id, f.x + x - drag.start[0], f.z + z - drag.start[1], Math.min(step, 0.1));
@@ -574,7 +691,8 @@ export default function Editor() {
     if (drag && drag.kind !== "draw" && dragDoc && drag.moved) {
       commit(dragDoc, drag.origin);
       const what = drag.kind === "resize" ? "Resized" : "Moved";
-      say(
+      if (drag.kind === "bend") say("Conduit re-routed — run length and voltage drop updated");
+      else say(
         `${what} ${
           drag.kind === "part"
             ? "part"
@@ -644,11 +762,13 @@ export default function Editor() {
 
   // ----- actions on the selection -----
   const del = useCallback(() => {
+    if (routeSel) return deleteBend();
     if (!selection) return;
     commit(deleteItems(doc, [selection.id]));
     say(selection.kind === "room" ? "Deleted room and its contents" : "Deleted");
     setSelection(null);
-  }, [selection, doc, commit, say]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection, doc, commit, say, routeSel]);
   const duplicate = useCallback(
     (sel: Selection = selection) => {
       if (!sel) return;
@@ -744,6 +864,7 @@ export default function Editor() {
       else if (e.key === "Escape") {
         setTool("select");
         setSelection(null);
+        setRouteSel(null);
         setDrag(null);
         setMeasure(null);
       } else if (k === "r" && !mod) rotate();
@@ -975,6 +1096,10 @@ export default function Editor() {
             measure={measure}
             title={meta?.name ?? "WireLab project"}
             toolbar={selectionBar}
+            route={routeView}
+            onRouteDown={onRouteDown}
+            onRouteDouble={onRouteDouble}
+            onBendDown={onBendDown}
             apiRef={planApi}
             onRoomDown={onRoomDown}
             onPartDown={onPartDown}
@@ -1033,6 +1158,11 @@ export default function Editor() {
             preview,
             ghost,
             apiRef: api,
+            route: routeView,
+            onRouteDown,
+            onRouteDouble,
+            onBendDown,
+            dragY: drag?.kind === "bend" ? drag.y : 0,
           }}
         />
         </ErrorBoundary>
@@ -1040,6 +1170,7 @@ export default function Editor() {
         {viewKind === "3d" && selectionBar && (
           <div className="absolute left-1/2 top-24 z-20 -translate-x-1/2">{selectionBar}</div>
         )}
+        {routeBar && <div className="absolute left-1/2 top-24 z-20 -translate-x-1/2">{routeBar}</div>}
 
         {/* Toolbar */}
         <div className="absolute left-3 right-3 top-3 flex flex-wrap items-center gap-1.5">
@@ -1211,7 +1342,7 @@ export default function Editor() {
         )}
 
         {/* Shape library */}
-        <div className={`absolute bottom-14 left-3 ${viewKind === "3d" ? "top-24" : "top-14"} flex w-48 flex-col gap-2 overflow-y-auto pr-1`}>
+        <div className={`absolute bottom-14 left-3 top-24 flex w-48 flex-col gap-2 overflow-y-auto pr-1`}>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -1413,6 +1544,7 @@ export default function Editor() {
           {HINT[hintKey]}
         </p>
         {preview3d.popover}
+        {libView === "slots" && <ThumbnailFactory />}
       </section>
 
       <aside className="flex flex-col gap-5 overflow-y-auto p-5 lg:max-h-[calc(100vh-118px)]">

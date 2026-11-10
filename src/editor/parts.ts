@@ -101,6 +101,11 @@ export interface EditorDoc {
   furniture?: Furniture[];
   /** Floor-to-ceiling height (m); 2.7 when absent. */
   ceilingM?: number;
+  /**
+   * Conduit runs the user has re-routed, keyed "fromId>toId" ("panel" for the panel).
+   * Values are the bend points between the two devices; absent = automatic route.
+   */
+  routes?: Record<string, V3[]>;
 }
 
 /** Which circuit a device rides on. "none" = low-voltage, not on a breaker. */

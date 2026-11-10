@@ -1,6 +1,7 @@
 import type { Circuit } from "@/engine/types";
 import { facing, type EditorPartType, type V3 } from "@/editor/editor";
-import { chainOrder, chainPaths, dropPoints } from "@/editor/wiring";
+import { PANEL_KEY, chainHops, chainOrder, dropPoints } from "@/editor/wiring";
+import type { V3 as V3t } from "@/editor/parts";
 
 export interface SceneRoom {
   id: string;
@@ -27,6 +28,10 @@ export interface SceneCircuit {
   id: string;
   devices: SceneDevice[];
   paths: V3[][];
+  /** Route key per path ("fromId>toId"), for hand re-routing. */
+  keys: string[];
+  /** True where the user drew the route. */
+  custom: boolean[];
   drops: V3[];
 }
 
@@ -60,16 +65,20 @@ export function sceneCircuits(
   rooms: SceneRoom[],
   tags: Map<string, string> = new Map(),
   ceiling?: number,
+  routes?: Record<string, V3t[]>,
 ): SceneCircuit[] {
   return circuits.map((c) => {
     const placed = c.parts.filter((p) => p.position) as (Circuit["parts"][number] & { position: V3 })[];
     const ordered = c.segments ? placed : chainOrder(panel, placed, ceiling);
-    const paths = chainPaths(panel, ordered, ceiling);
+    const hops = chainHops(panel, ordered, ceiling, undefined, { panelId: PANEL_KEY, routes });
+    const paths = hops.map((h) => h.path);
     return {
       id: c.id,
       devices: ordered.map((p) => deviceFor(p, rooms, tags.get(p.id))),
       paths,
-      drops: dropPoints(paths, ceiling),
+      keys: hops.map((h) => h.key),
+      custom: hops.map((h) => h.custom),
+      drops: dropPoints(paths.filter((_, i) => !hops[i].custom), ceiling),
     };
   });
 }
