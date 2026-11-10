@@ -6,6 +6,11 @@ import { useEffect, useMemo, useRef, type MutableRefObject } from "react";
 import { BoxGeometry as BoxGeometryImpl, CanvasTexture, Plane, Raycaster, SRGBColorSpace, Vector2, Vector3 } from "three";
 import type { OrbitControls as OrbitImpl } from "three-stdlib";
 import { CEILING } from "@/data/goldenHouse";
+import { defaultFinish } from "@/editor/interior";
+import type { FloorKind, Furniture, Room } from "@/editor/parts";
+import { Environment, Lightformer } from "@react-three/drei";
+import { floorTexture } from "./textures";
+import { FurnitureMesh } from "./Furniture3D";
 import type { V3 } from "@/editor/editor";
 import { colorFor } from "./colors";
 import type { SceneCircuit, SceneDevice, SceneRoom } from "./sceneData";
@@ -20,11 +25,14 @@ export interface SceneApi {
   /** Floor point (y = 0) under a screen position, or null. */
   floorAt: (clientX: number, clientY: number) => [number, number] | null;
   setView: (v: ViewName) => void;
+  /** PNG data URL of the current frame. */
+  capture: () => string;
 }
 
 export interface EditorHooks {
   rotate: boolean;
-  selection?: { kind: "room" | "part"; id: string } | null;
+  selection?: { kind: "room" | "part" | "furniture"; id: string } | null;
+  onFurnitureDown?: (id: string, x: number, z: number) => void;
   dragging?: boolean;
   onRoomDown?: (id: string, x: number, z: number) => void;
   onPartDown?: (id: string, x: number, z: number) => void;
@@ -51,6 +59,13 @@ interface Props {
   view?: ViewMode;
   editor?: EditorHooks;
   camera?: V3;
+  furniture?: Furniture[];
+  ceiling?: number;
+  /** "render" = solid walls, shadows, textured floors. */
+  mode?: "edit" | "render";
+  lighting?: "day" | "night";
+  showWiring?: boolean;
+  cutaway?: boolean;
 }
 
 const PVC = "#e8792b";
@@ -268,55 +283,98 @@ function Walls({
   rooms,
   selected,
   onDown,
+  render,
+  wallH,
 }: {
   rooms: SceneRoom[];
   selected?: string;
   onDown?: (id: string, x: number, z: number) => void;
+  render: boolean;
+  wallH: number;
 }) {
   return (
     <group>
       {rooms.map((r) => {
+        const fin = defaultFinish({ ...r, kind: r.kind ?? "other" } as Room);
+        const floor = r.floor ?? fin.floor;
+        const paint = r.wall ?? fin.wall;
+        // Each room draws its own wall skin just inside its outline, so shared walls never z-fight.
+        const t = WALL_T / 2;
         const walls: { pos: V3; size: V3 }[] = [
-          { pos: [r.x, CEILING / 2, r.z + r.d / 2], size: [WALL_T, CEILING, r.d] },
-          { pos: [r.x + r.w, CEILING / 2, r.z + r.d / 2], size: [WALL_T, CEILING, r.d] },
-          { pos: [r.x + r.w / 2, CEILING / 2, r.z], size: [r.w, CEILING, WALL_T] },
-          { pos: [r.x + r.w / 2, CEILING / 2, r.z + r.d], size: [r.w, CEILING, WALL_T] },
+          { pos: [r.x + t / 2, wallH / 2, r.z + r.d / 2], size: [t, wallH, r.d] },
+          { pos: [r.x + r.w - t / 2, wallH / 2, r.z + r.d / 2], size: [t, wallH, r.d] },
+          { pos: [r.x + r.w / 2, wallH / 2, r.z + t / 2], size: [r.w, wallH, t] },
+          { pos: [r.x + r.w / 2, wallH / 2, r.z + r.d - t / 2], size: [r.w, wallH, t] },
         ];
         return (
           <group key={r.id}>
-            <mesh
-              position={[r.x + r.w / 2, 0.005, r.z + r.d / 2]}
-              rotation={[-Math.PI / 2, 0, 0]}
-              {...(onDown
-                ? {
-                    onPointerDown: (e: ThreeEvent<PointerEvent>) => {
-                      if (e.button !== 0) return;
-                      e.stopPropagation();
-                      onDown(r.id, e.point.x, e.point.z);
-                    },
-                  }
-                : { raycast: () => null })}
-            >
-              <planeGeometry args={[r.w, r.d]} />
-              <meshStandardMaterial color={selected === r.id ? "#4a4a3a" : "#3a4553"} roughness={0.9} />
-            </mesh>
+            <Floor r={r} kind={floor.kind} color={floor.color} render={render} selected={selected === r.id} onDown={onDown} />
             {walls.map((w, i) => (
               <group key={i}>
-                <mesh position={w.pos} raycast={() => null}>
+                <mesh position={w.pos} raycast={() => null} castShadow={render} receiveShadow={render}>
                   <boxGeometry args={w.size} />
-                  <meshStandardMaterial color="#d8d1c2" transparent opacity={0.14} depthWrite={false} />
+                  {render ? (
+                    <meshStandardMaterial key="solid" color={paint} roughness={0.92} />
+                  ) : (
+                    <meshStandardMaterial key="ghost" color={paint} transparent opacity={0.16} depthWrite={false} />
+                  )}
                 </mesh>
-                <mesh position={[w.pos[0], CEILING + 0.005, w.pos[2]]} raycast={() => null}>
+                <mesh position={[w.pos[0], wallH + 0.005, w.pos[2]]} raycast={() => null}>
                   <boxGeometry args={[w.size[0], 0.01, w.size[2]]} />
-                  <meshStandardMaterial color="#b9b09d" />
+                  <meshStandardMaterial color={render ? "#3b3f45" : "#b9b09d"} />
                 </mesh>
               </group>
             ))}
-            <Label text={r.name.toUpperCase()} position={[r.x + r.w / 2, 0.15, r.z + r.d / 2]} color="#94a3b8" />
+            {!render && (
+              <Label text={r.name.toUpperCase()} position={[r.x + r.w / 2, 0.15, r.z + r.d / 2]} color="#94a3b8" />
+            )}
           </group>
         );
       })}
     </group>
+  );
+}
+
+function Floor({
+  r,
+  kind,
+  color,
+  render,
+  selected,
+  onDown,
+}: {
+  r: SceneRoom;
+  kind: FloorKind;
+  color: string;
+  render: boolean;
+  selected: boolean;
+  onDown?: (id: string, x: number, z: number) => void;
+}) {
+  const map = useMemo(() => floorTexture(kind, color, r.w, r.d), [kind, color, r.w, r.d]);
+  useEffect(() => () => map.dispose(), [map]);
+  return (
+    <mesh
+      position={[r.x + r.w / 2, 0.005, r.z + r.d / 2]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      receiveShadow
+      {...(onDown
+        ? {
+            onPointerDown: (e: ThreeEvent<PointerEvent>) => {
+              if (e.button !== 0) return;
+              e.stopPropagation();
+              onDown(r.id, e.point.x, e.point.z);
+            },
+          }
+        : { raycast: () => null })}
+    >
+      <planeGeometry args={[r.w, r.d]} />
+      <meshStandardMaterial
+        map={map}
+        color={render ? "#ffffff" : selected ? "#b8a26a" : "#7d8792"}
+        roughness={kind === "tile" || kind === "concrete" ? 0.45 : 0.75}
+        metalness={0}
+      />
+    </mesh>
   );
 }
 
@@ -390,7 +448,7 @@ function Interaction({
   controls: MutableRefObject<OrbitImpl | null>;
   rooms: SceneRoom[];
 }) {
-  const { camera, gl } = useThree();
+  const { camera, gl, scene } = useThree();
   const roomsRef = useRef(rooms);
   useEffect(() => {
     roomsRef.current = rooms;
@@ -412,6 +470,10 @@ function Interaction({
     if (!editor?.apiRef) return;
     editor.apiRef.current = {
       floorAt,
+      capture: () => {
+        gl.render(scene, camera);
+        return gl.domElement.toDataURL("image/png");
+      },
       setView: (v) => {
         const rs = roomsRef.current;
         const minX = rs.length ? Math.min(...rs.map((r) => r.x)) : 0;
@@ -433,7 +495,7 @@ function Interaction({
         controls.current?.update();
       },
     };
-  }, [editor?.apiRef, floorAt, camera, controls]);
+  }, [editor?.apiRef, floorAt, camera, controls, gl, scene]);
 
   const dragging = editor?.dragging;
   const onMove = editor?.onDragMove;
@@ -472,7 +534,23 @@ export default function HouseScene({
   view = "real",
   editor,
   camera = [14, 11, 15],
+  furniture = [],
+  ceiling = CEILING,
+  mode = "edit",
+  lighting = "day",
+  showWiring = true,
+  cutaway = false,
 }: Props) {
+  const render = mode === "render";
+  const night = render && lighting === "night";
+  const wallH = render && cutaway ? 1.1 : ceiling;
+  const wiringVisible = !render || showWiring;
+  // In a cutaway render, anything mounted above the cut (lights, panel, aircon) would float, so hide it.
+  const above = (d: { position: V3 }) => render && cutaway && d.position[1] > wallH;
+  const lit = useMemo(
+    () => circuits.flatMap((c) => (tripped.has(c.id) ? [] : c.devices.filter((d) => d.type === "light"))).slice(0, 24),
+    [circuits, tripped],
+  );
   const controls = useRef<OrbitImpl | null>(null);
   const grab =
     <A extends unknown[]>(fn?: (...a: A) => void) =>
@@ -503,11 +581,57 @@ export default function HouseScene({
       : undefined;
 
   return (
-    <Canvas camera={{ position: camera, fov: 40 }} dpr={[1, 2]}>
-      <color attach="background" args={["#0b1622"]} />
-      <hemisphereLight args={["#f1f5f9", "#1e293b", 0.9]} />
-      <directionalLight position={[8, 14, 6]} intensity={0.9} />
-      <gridHelper args={[30, 60, "#1d3550", "#13263a"]} position={[5, 0, 4]} />
+    <Canvas camera={{ position: camera, fov: 40 }} dpr={[1, 2]} shadows gl={{ preserveDrawingBuffer: true }}>
+      <color attach="background" args={[night ? "#05080d" : render ? "#c9d3dc" : "#0b1622"]} />
+      {render ? (
+        <>
+          <hemisphereLight args={["#ffffff", "#8a8172", night ? 0.04 : 0.45]} />
+          {!night && (
+            <directionalLight
+              position={[14, 20, 9]}
+              intensity={2.2}
+              castShadow
+              shadow-mapSize={[2048, 2048]}
+              shadow-bias={-0.0004}
+              shadow-normalBias={0.02}
+              shadow-camera-left={-16}
+              shadow-camera-right={16}
+              shadow-camera-top={16}
+              shadow-camera-bottom={-16}
+              shadow-camera-near={1}
+              shadow-camera-far={60}
+            >
+              <object3D attach="target" position={[5, 0, 4]} />
+            </directionalLight>
+          )}
+          <Environment resolution={128} environmentIntensity={night ? 0.06 : 0.6}>
+            <Lightformer form="rect" intensity={2} position={[0, 8, 0]} rotation-x={Math.PI / 2} scale={[20, 20, 1]} />
+            <Lightformer form="rect" intensity={1} position={[-10, 4, 6]} rotation-y={Math.PI / 2} scale={[12, 4, 1]} />
+            <Lightformer form="rect" intensity={0.6} color="#ffe7c2" position={[10, 3, -6]} rotation-y={-Math.PI / 2} scale={[12, 4, 1]} />
+          </Environment>
+          {night &&
+            lit.map((d) => (
+              <pointLight
+                key={d.id}
+                position={[d.position[0], d.position[1] - 0.15, d.position[2]]}
+                color="#ffd9a3"
+                intensity={4}
+                distance={6}
+                decay={1.6}
+              />
+            ))}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[5, -0.01, 4]} receiveShadow raycast={() => null}>
+            <planeGeometry args={[80, 80]} />
+            <meshStandardMaterial color={night ? "#0b0f14" : "#a7b0a0"} roughness={1} />
+          </mesh>
+        </>
+      ) : (
+        <>
+          <hemisphereLight args={["#f1f5f9", "#1e293b", 0.9]} />
+          <directionalLight position={[8, 14, 6]} intensity={0.9} />
+          <gridHelper args={[30, 60, "#1d3550", "#13263a"]} position={[5, 0, 4]} />
+        </>
+      )}
 
       {editor && (
         <mesh
@@ -522,7 +646,15 @@ export default function HouseScene({
         </mesh>
       )}
 
-      <Walls rooms={rooms} selected={selRoom?.id} onDown={grab(editor?.onRoomDown)} />
+      <Walls rooms={rooms} selected={selRoom?.id} onDown={grab(editor?.onRoomDown)} render={render} wallH={wallH} />
+      {furniture.map((f) => (
+        <FurnitureMesh
+          key={f.id}
+          f={f}
+          selected={sel?.kind === "furniture" && sel.id === f.id}
+          onDown={grab(editor?.onFurnitureDown)}
+        />
+      ))}
       {selRoom && <SelectedRoom r={selRoom} onHandleDown={grab(editor?.onHandleDown)} />}
       {selPart && <SelectedPart position={selPart.position} />}
       <Interaction editor={editor} controls={controls} rooms={rooms} />
@@ -539,7 +671,7 @@ export default function HouseScene({
       )}
       {editor?.ghost && <Device d={editor.ghost} tint="#f5b942" on={false} opacity={0.5} />}
 
-      {panel && (
+      {panel && !above(panel) && (
         <group position={panel.position} rotation={[0, panel.facing, 0]}>
           <mesh position={[0, 0, 0.05]}>
             <boxGeometry args={[0.42, 0.55, 0.1]} />
@@ -575,7 +707,7 @@ export default function HouseScene({
         </group>
       )}
 
-      {loose.map((d) => (
+      {loose.filter((d) => !above(d)).map((d) => (
         <Device
           key={d.id}
           d={d}
@@ -598,16 +730,16 @@ export default function HouseScene({
           const opacity = dim ? 0.12 : 1;
           return (
             <group key={c.id}>
-              {c.paths.map((p, i) => (
+              {wiringVisible && c.paths.map((p, i) => (
                 <Conduit key={i} path={p} color={pipe} opacity={opacity} glow={bad && !dim ? 0.5 : 0.08} />
               ))}
-              {c.drops.map((p, i) => (
+              {wiringVisible && c.drops.map((p, i) => (
                 <mesh key={`j${i}`} position={p} raycast={() => null}>
                   <cylinderGeometry args={[0.07, 0.07, 0.05, 8]} />
                   <meshStandardMaterial color="#8b96a3" transparent opacity={opacity} />
                 </mesh>
               ))}
-              {c.devices.map((d) => (
+              {c.devices.filter((d) => !above(d)).map((d) => (
                 <Device
                   key={d.id}
                   d={d}

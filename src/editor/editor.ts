@@ -1,8 +1,11 @@
 import { CEILING, PANEL_POSITION, ROOMS, goldenHouse } from "@/data/goldenHouse";
 import type { Circuit, Part, PartType, Project } from "@/engine/types";
+import { FURNITURE, fitInside } from "./interior";
 import {
   PART_INFO,
   type EditorDoc,
+  type Furniture,
+  type FurnitureType,
   type EditorPart,
   type EditorPartType,
   type Room,
@@ -63,10 +66,17 @@ export const roomAt = (rooms: Room[], x: number, z: number) =>
 const INSET = 0.08;
 
 /** Snap a clicked floor point to where the part is actually mounted. */
-export function snapPart(type: EditorPartType, room: Room, x: number, z: number, height?: number): V3 {
+export function snapPart(
+  type: EditorPartType,
+  room: Room,
+  x: number,
+  z: number,
+  height?: number,
+  ceiling = CEILING,
+): V3 {
   const cx = Math.min(Math.max(x, room.x + 0.2), room.x + room.w - 0.2);
   const cz = Math.min(Math.max(z, room.z + 0.2), room.z + room.d - 0.2);
-  if (type === "light") return [r3(cx), r3(CEILING - 0.05), r3(cz)];
+  if (type === "light") return [r3(cx), r3(ceiling - 0.05), r3(cz)];
 
   const h = height ?? (type === "outlet" && room.kind === "kitchen" ? 1.1 : PART_INFO[type].height!);
   const walls = [
@@ -93,7 +103,12 @@ export function facing(pos: V3, room: { x: number; z: number; w: number; d: numb
 export function addPart(doc: EditorDoc, type: EditorPartType, x: number, z: number): Result<{ doc: EditorDoc }> {
   const room = roomAt(doc.rooms, x, z);
   if (!room) return { ok: false, error: "Place parts inside a room" };
-  const part: EditorPart = { id: uid(), type, roomId: room.id, position: snapPart(type, room, x, z) };
+  const part: EditorPart = {
+    id: uid(),
+    type,
+    roomId: room.id,
+    position: snapPart(type, room, x, z, undefined, doc.ceilingM),
+  };
   const others = type === "panel" ? doc.parts.filter((p) => p.type !== "panel") : doc.parts;
   return { ok: true, doc: { ...doc, parts: [...others, part] } };
 }
@@ -154,11 +169,13 @@ export function toProject(doc: EditorDoc): Result<{ project: Project }> {
       })),
   ];
 
+  const ceiling = doc.ceilingM ?? CEILING;
   const circuits: Circuit[] = groups.map((g, i) => {
-    const ordered = chainOrder(panel.position, g.parts);
+    const ordered = chainOrder(panel.position, g.parts, ceiling);
     const segments = chainSegments(
       panel.position,
       ordered.map((p) => ({ position: p.position, va: partVA(p) })),
+      ceiling,
     );
     return {
       id: `C${i + 1}`,
@@ -212,6 +229,7 @@ export function goldenEditorDoc(): EditorDoc {
   return {
     feederRunM: g.feederRunM,
     rooms,
+    furniture: goldenFurniture(rooms),
     parts: [
       { id: "panel", type: "panel", roomId: "living", position: PANEL_POSITION },
       ...g.circuits.flatMap((c) =>
@@ -230,6 +248,38 @@ export function goldenEditorDoc(): EditorDoc {
       })),
     ],
   };
+}
+
+/** Sample furniture for the golden house: [type, room, x, z, rot]. */
+const GOLDEN_FURNITURE: [FurnitureType, string, number, number, Furniture["rot"]][] = [
+  ["tv_stand", "living", 2.5, 0.3, 0],
+  ["coffee_table", "living", 2.5, 2.3, 0],
+  ["sofa", "living", 2.5, 3.5, 180],
+  ["counter", "kitchen", 6.6, 0.35, 0],
+  ["fridge", "kitchen", 8.1, 0.4, 0],
+  ["dining_table", "kitchen", 6.75, 2.6, 0],
+  ["chair", "kitchen", 6.4, 1.9, 0],
+  ["chair", "kitchen", 7.1, 1.9, 0],
+  ["chair", "kitchen", 6.4, 3.3, 180],
+  ["chair", "kitchen", 7.1, 3.3, 180],
+  ["vanity", "bath", 9.25, 0.3, 0],
+  ["toilet", "bath", 9.25, 3.6, 180],
+  ["bed_double", "bed1", 1.75, 5.1, 0],
+  ["wardrobe", "bed1", 0.35, 7.1, 270],
+  ["bed_double", "bed2", 5.25, 5.1, 0],
+  ["wardrobe", "bed2", 6.65, 7.1, 90],
+  ["bed_single", "bed3", 8.0, 5.1, 0],
+  ["desk", "bed3", 9.65, 6.9, 90],
+];
+
+export function goldenFurniture(rooms: Room[]): Furniture[] {
+  return GOLDEN_FURNITURE.map(([type, roomId, x, z, rot], i) => {
+    const spec = FURNITURE[type];
+    return fitInside(
+      { id: `F${i + 1}`, type, roomId, x, z, rot, w: spec.w, d: spec.d, h: spec.h, color: spec.color },
+      rooms.find((r) => r.id === roomId)!,
+    );
+  });
 }
 
 export { segLength };

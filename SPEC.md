@@ -75,6 +75,13 @@ One-storey residential, single-phase 230 V, one panelboard, up to ~15 branch cir
 - Mounting-height ranges: outlet 0.2–1.5 m, switch 1.0–1.6 m, aircon 1.8–2.5 m, water heater 1.5–2.2 m, panel 1.2–1.8 m.
 - Duplicating a part offsets it 0.5 m along its wall; duplicating a room copies its parts into the first free spot beside it.
 
+## Interior rules
+
+- Furniture stays inside its room; dropping, moving, rotating or resizing pushes it back inside the walls.
+- Each piece has width, depth and height limits (e.g. double bed 1.2–2.0 m wide); values outside are refused.
+- Rooms carry their furniture when moved, rotated (position and facing), duplicated or deleted.
+- Ceiling height is 2.4–3.6 m. Lights follow the ceiling, and every ceiling-routed wire run grows by the height change on the way up and on the way down.
+
 ## Build order (worked backward)
 
 1. **PEC engine + tests** — done when `npm test` is green. ✅
@@ -82,6 +89,7 @@ One-storey residential, single-phase 230 V, one panelboard, up to ~15 branch cir
 3. **Editor** — draw rooms on a grid, place parts with snapping. ✅ (tests: `src/editor/editor.test.ts`)
 4. **Wiring** — daisy-chained circuits, hand-drawn wiring order, per-segment voltage drop, switches, materials. ✅ (tests: `src/editor/wiring.test.ts`)
 5. **Tinkercad-style editing** — shape library with drag-and-drop, select/move/resize/rotate/duplicate, properties panel, shortcuts, redo, snap setting, view presets. ✅ (tests: `src/editor/transform.test.ts`)
-6. **Outputs** — PDF load schedule, single-line diagram, BOM with PHP prices.
+6. **Interior + render** — furniture (14 pieces, sized within limits, recoloured, rotated), floor finish and wall paint per room, custom room size, ceiling height 2.4–3.6 m (lengthens ceiling-routed wire), render mode with shadows, day/night lighting, cutaway walls and PNG export. ✅ (tests: `src/editor/interior.test.ts`)
+7. **Outputs** — PDF load schedule, single-line diagram, BOM with PHP prices.
 
 Each step is one instruction: "make the tests for step N pass, following SPEC.md".

@@ -1,4 +1,5 @@
 import { facing, roomAt, ROOM_KINDS, snap, snapPart } from "./editor";
+import { fitInside } from "./interior";
 import {
   HEIGHT_RANGE,
   PART_INFO,
@@ -88,6 +89,7 @@ export function moveRoom(doc: EditorDoc, id: string, dx: number, dz: number, ste
       parts: doc.parts.map((p) =>
         p.roomId === id ? { ...p, position: [r3(p.position[0] + mx), p.position[1], r3(p.position[2] + mz)] } : p,
       ),
+      furniture: doc.furniture?.map((f) => (f.roomId === id ? { ...f, x: r3(f.x + mx), z: r3(f.z + mz) } : f)),
     },
   };
 }
@@ -108,6 +110,7 @@ export function resizeRoom(doc: EditorDoc, id: string, rect: Rect): Result {
           ? reseat(p, next, p.position[0], p.position[2], p.type === "light" ? undefined : facing(p.position, room))
           : p,
       ),
+      furniture: doc.furniture?.map((f) => (f.roomId === id ? fitInside(f, next) : f)),
     },
   };
 }
@@ -137,6 +140,14 @@ export function rotateRoom(doc: EditorDoc, id: string): Result {
         const dz = p.position[2] - cz;
         return reseat(p, next, cx - dz, cz + dx, p.type === "light" ? undefined : turn(facing(p.position, room)));
       }),
+      furniture: doc.furniture?.map((f) =>
+        f.roomId === id
+          ? fitInside(
+              { ...f, x: cx - (f.z - cz), z: cz + (f.x - cx), rot: ((f.rot + 90) % 360) as typeof f.rot },
+              next,
+            )
+          : f,
+      ),
     },
   };
 }
@@ -146,7 +157,11 @@ export function movePart(doc: EditorDoc, id: string, x: number, z: number): Resu
   if (!part) return { ok: false, error: "No such part" };
   const room = roomAt(doc.rooms, x, z);
   if (!room) return { ok: false, error: "Place parts inside a room" };
-  const moved = { ...part, roomId: room.id, position: snapPart(part.type, room, x, z, part.height) };
+  const moved = {
+    ...part,
+    roomId: room.id,
+    position: snapPart(part.type, room, x, z, part.height, doc.ceilingM),
+  };
   return { ok: true, doc: { ...doc, parts: doc.parts.map((p) => (p.id === id ? moved : p)) } };
 }
 
@@ -208,7 +223,18 @@ export function duplicateRoom(doc: EditorDoc, id: string): Result {
           delete q.seq;
           return q;
         });
-      return { ok: true, doc: { ...doc, rooms: [...doc.rooms, copy], parts: [...doc.parts, ...parts] } };
+      const furniture = (doc.furniture ?? [])
+        .filter((f) => f.roomId === id)
+        .map((f) => ({ ...f, id: uid(), roomId: copy.id, x: r3(f.x + ox), z: r3(f.z + oz) }));
+      return {
+        ok: true,
+        doc: {
+          ...doc,
+          rooms: [...doc.rooms, copy],
+          parts: [...doc.parts, ...parts],
+          furniture: [...(doc.furniture ?? []), ...furniture],
+        },
+      };
     }
   }
   return { ok: false, error: "No free space next to this room" };
@@ -220,6 +246,7 @@ export function deleteItems(doc: EditorDoc, ids: string[]): EditorDoc {
     ...doc,
     rooms: doc.rooms.filter((r) => !gone.has(r.id)),
     parts: doc.parts.filter((p) => !gone.has(p.id) && !gone.has(p.roomId)),
+    furniture: doc.furniture?.filter((f) => !gone.has(f.id) && !gone.has(f.roomId)),
   };
 }
 

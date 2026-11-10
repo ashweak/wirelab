@@ -5,6 +5,9 @@ import { chainOrder, chainPaths, dropPoints } from "@/editor/wiring";
 export interface SceneRoom {
   id: string;
   name: string;
+  kind?: import("@/editor/parts").RoomKind;
+  floor?: import("@/editor/parts").Room["floor"];
+  wall?: string;
   x: number;
   z: number;
   w: number;
@@ -56,16 +59,17 @@ export function sceneCircuits(
   circuits: Circuit[],
   rooms: SceneRoom[],
   tags: Map<string, string> = new Map(),
+  ceiling?: number,
 ): SceneCircuit[] {
   return circuits.map((c) => {
     const placed = c.parts.filter((p) => p.position) as (Circuit["parts"][number] & { position: V3 })[];
-    const ordered = c.segments ? placed : chainOrder(panel, placed);
-    const paths = chainPaths(panel, ordered);
+    const ordered = c.segments ? placed : chainOrder(panel, placed, ceiling);
+    const paths = chainPaths(panel, ordered, ceiling);
     return {
       id: c.id,
       devices: ordered.map((p) => deviceFor(p, rooms, tags.get(p.id))),
       paths,
-      drops: dropPoints(paths),
+      drops: dropPoints(paths, ceiling),
     };
   });
 }

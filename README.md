@@ -4,7 +4,9 @@ A browser 3D wiring lab for Filipino electrical engineers: place parts in a hous
 
 **Live demo:** https://ashweak.github.io/wirelab/
 
-![WireLab PH demo](docs/screenshot.png)
+![WireLab PH render mode](docs/screenshot.png)
+
+![Night render](docs/render-night.png)
 
 ## What works now
 
@@ -15,6 +17,7 @@ A browser 3D wiring lab for Filipino electrical engineers: place parts in a hous
 - Demo mode: plug appliances into the bedroom circuit until its breaker trips
 - **Realistic wiring:** daisy-chained circuits in orange PVC conduit, through-the-wall runs between devices on the same wall, junction boxes at ceiling drops, wall switches, a Wire tool to set the wiring order by hand, per-segment voltage drop, and a rough-in materials list (wire by size, conduit, boxes, breakers)
 - **Tinkercad-style editor:** drag rooms and electrical parts from a shape library onto the work plane; click to select, drag to move, pull corner handles to resize, rotate 90°, duplicate, copy/paste, delete; edit name, type, size and mounting height in a properties panel; undo/redo, snap grid 0.1–1 m, Home/Top/Front/Fit views, keyboard shortcuts (Del, Ctrl+D, Ctrl+Z, Ctrl+Shift+Z, R, arrows)
+- **Interior + render:** 14 furniture pieces you can size, recolour and rotate; floor finish (tile, wood, vinyl, concrete) and wall paint per room; custom room size; ceiling height that updates the wire runs; a render mode with soft shadows, studio lighting, procedural floor textures, day/night (ceiling lights light the rooms at night), cutaway walls and PNG export
 - **Design your own:** draw rooms on a grid, place panel, lights, outlets, aircon and water heater (snapped to code mounting heights), and get auto-grouped circuits with a live load schedule; undo, autosave, JSON import/export
 
 ## Built backward from a spec

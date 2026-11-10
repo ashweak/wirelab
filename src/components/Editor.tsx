@@ -34,6 +34,23 @@ import {
   updateRoom,
 } from "@/editor/transform";
 import { designChecks, materials } from "@/editor/wiring";
+import {
+  CEILING_RANGE,
+  FLOOR_KINDS,
+  FURNITURE,
+  WALL_PAINTS,
+  addFurniture,
+  ceilingOf,
+  defaultFinish,
+  duplicateFurniture,
+  moveFurniture,
+  resizeFurniture,
+  rotateFurniture,
+  setCeiling,
+  setFinish,
+  setFurnitureColor,
+} from "@/editor/interior";
+import type { FloorKind, FurnitureType } from "@/editor/parts";
 import { ChecksView, H2, MaterialsTable, ScheduleTable } from "./ScheduleView";
 import type { Corner, SceneApi, ViewMode, ViewName } from "./HouseScene";
 import { deviceFor, sceneCircuits } from "./sceneData";
@@ -41,11 +58,12 @@ import { ViewToggle } from "./ViewToggle";
 
 const HouseScene = dynamic(() => import("./HouseScene"), { ssr: false });
 
-type Tool = "select" | "room" | "wire" | `place:${EditorPartType}` | `preset:${string}`;
-type Selection = { kind: "room" | "part"; id: string } | null;
+type Tool = "select" | "room" | "wire" | `place:${EditorPartType}` | `preset:${string}` | `furn:${FurnitureType}`;
+type Selection = { kind: "room" | "part" | "furniture"; id: string } | null;
 type Drag =
   | { kind: "room"; id: string; start: [number, number]; origin: EditorDoc; moved: boolean }
   | { kind: "part"; id: string; start: [number, number]; origin: EditorDoc; moved: boolean }
+  | { kind: "furniture"; id: string; start: [number, number]; origin: EditorDoc; moved: boolean }
   | { kind: "resize"; id: string; corner: Corner; origin: EditorDoc; moved: boolean }
   | { kind: "draw"; start: [number, number] };
 
@@ -70,6 +88,7 @@ const HINT: Record<string, string> = {
   wire: "Click devices in the order the wire should run from the panel. Unclicked devices chain to the nearest one.",
   place: "Click inside a room to place. Wall parts snap to the nearest wall. Esc to stop.",
   preset: "Click on the grid to drop the room. Esc to stop.",
+  furn: "Click inside a room to place. It stays inside the walls. R rotates, Esc to stop.",
 };
 
 function load(): EditorDoc {
@@ -101,7 +120,8 @@ function Num({
   const commit = () => {
     const v = Number(text);
     if (Number.isFinite(v) && v !== value) onCommit(v);
-    else setText(String(value));
+    // Show the current value again; if the change was accepted the new value replaces it on the next render.
+    setText(String(value));
   };
   return (
     <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-slate-500">
@@ -134,6 +154,11 @@ export default function Editor() {
   const [focus, setFocus] = useState<string | null>(null);
   const [view, setView] = useState<ViewMode>("real");
   const [clipboard, setClipboard] = useState<Selection>(null);
+  const [mode, setMode] = useState<"edit" | "render">("edit");
+  const [lighting, setLighting] = useState<"day" | "night">("day");
+  const [cutaway, setCutaway] = useState(true);
+  const [showWiring, setShowWiring] = useState(false);
+  const [custom, setCustom] = useState({ w: 3.5, d: 3, kind: "bedroom" as RoomKind });
   const api = useRef<SceneApi | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const loaded = useRef(false);
@@ -193,18 +218,31 @@ export default function Editor() {
     () => new Map(shown.parts.filter((p) => p.seq !== undefined).map((p) => [p.id, String(p.seq)])),
     [shown.parts],
   );
+  const ceiling = ceilingOf(shown);
   const circuits = useMemo(
-    () => (built.ok && panel ? sceneCircuits(panel.position, built.project.circuits, shown.rooms, tags) : []),
-    [built, panel, shown.rooms, tags],
+    () =>
+      built.ok && panel ? sceneCircuits(panel.position, built.project.circuits, shown.rooms, tags, ceiling) : [],
+    [built, panel, shown.rooms, tags, ceiling],
   );
   const extraChecks = useMemo(() => designChecks(doc), [doc]);
   const bom = useMemo(() => materials(doc), [doc]);
   const wired = doc.parts.some((p) => p.seq !== undefined);
   const selRoom = selection?.kind === "room" ? shown.rooms.find((r) => r.id === selection.id) : undefined;
   const selPart = selection?.kind === "part" ? shown.parts.find((p) => p.id === selection.id) : undefined;
+  const selFurn =
+    selection?.kind === "furniture" ? (shown.furniture ?? []).find((f) => f.id === selection.id) : undefined;
+  const furnType = tool.startsWith("furn:") ? (tool.slice(5) as FurnitureType) : null;
 
   const placeType = tool.startsWith("place:") ? (tool.slice(6) as EditorPartType) : null;
-  const preset = tool.startsWith("preset:") ? ROOM_PRESETS.find((p) => p.id === tool.slice(7)) : undefined;
+  const preset = useMemo(
+    () =>
+      tool === "preset:custom"
+        ? { id: "custom", label: `Custom ${custom.w} × ${custom.d}`, ...custom }
+        : tool.startsWith("preset:")
+          ? ROOM_PRESETS.find((p) => p.id === tool.slice(7))
+          : undefined,
+    [tool, custom],
+  );
 
   // ----- ghosts / previews -----
   const preview = useMemo(() => {
@@ -265,6 +303,11 @@ export default function Editor() {
     setSelection({ kind: "part", id });
     setDrag({ kind: "part", id, start: [x, z], origin: doc, moved: false });
   };
+  const onFurnitureDown = (id: string, x: number, z: number) => {
+    if (tool !== "select") return;
+    setSelection({ kind: "furniture", id });
+    setDrag({ kind: "furniture", id, start: [x, z], origin: doc, moved: false });
+  };
   const onHandleDown = (id: string, corner: Corner) =>
     setDrag({ kind: "resize", id, corner, origin: doc, moved: false });
 
@@ -283,6 +326,10 @@ export default function Editor() {
     } else if (placeType) {
       const s = Math.min(step, 0.25);
       apply(addPart(doc, placeType, snap(x, s), snap(z, s)), `Placed ${PART_INFO[placeType].label}`);
+    } else if (furnType) {
+      const r = addFurniture(doc, furnType, x, z, Math.min(step, 0.1));
+      apply(r, `Placed ${FURNITURE[furnType].label}`);
+      if (r.ok) setSelection({ kind: "furniture", id: r.doc.furniture!.at(-1)!.id });
     } else if (preset) {
       const r = placePreset(doc, preset, x, z, step);
       apply(r, `Added ${preset.label}`);
@@ -300,7 +347,10 @@ export default function Editor() {
     if (!drag || drag.kind === "draw") return;
     let r: { ok: true; doc: EditorDoc } | { ok: false; error: string };
     if (drag.kind === "room") r = moveRoom(drag.origin, drag.id, x - drag.start[0], z - drag.start[1], step);
-    else if (drag.kind === "part") {
+    else if (drag.kind === "furniture") {
+      const f = drag.origin.furniture!.find((q) => q.id === drag.id)!;
+      r = moveFurniture(drag.origin, drag.id, f.x + x - drag.start[0], f.z + z - drag.start[1], Math.min(step, 0.1));
+    } else if (drag.kind === "part") {
       const s = Math.min(step, 0.25);
       r = movePart(drag.origin, drag.id, snap(x, s), snap(z, s));
     } else {
@@ -325,7 +375,15 @@ export default function Editor() {
     if (drag && drag.kind !== "draw" && draft && drag.moved) {
       commit(draft, drag.origin);
       const what = drag.kind === "resize" ? "Resized" : "Moved";
-      say(`${what} ${drag.kind === "part" ? "part" : drag.origin.rooms.find((r) => r.id === drag.id)?.name}`);
+      say(
+        `${what} ${
+          drag.kind === "part"
+            ? "part"
+            : drag.kind === "furniture"
+              ? FURNITURE[drag.origin.furniture!.find((f) => f.id === drag.id)!.type].label
+              : drag.origin.rooms.find((r) => r.id === drag.id)?.name
+        }`,
+      );
     }
     setDraft(null);
     if (drag?.kind !== "draw") setDrag(null);
@@ -335,24 +393,30 @@ export default function Editor() {
   const del = useCallback(() => {
     if (!selection) return;
     commit(deleteItems(doc, [selection.id]));
-    say(selection.kind === "room" ? "Deleted room and its parts" : "Deleted part");
+    say(selection.kind === "room" ? "Deleted room and its contents" : "Deleted");
     setSelection(null);
   }, [selection, doc, commit, say]);
   const duplicate = useCallback(
     (sel: Selection = selection) => {
       if (!sel) return;
-      const r = sel.kind === "room" ? duplicateRoom(doc, sel.id) : duplicatePart(doc, sel.id);
+      const r =
+        sel.kind === "room"
+          ? duplicateRoom(doc, sel.id)
+          : sel.kind === "furniture"
+            ? duplicateFurniture(doc, sel.id)
+            : duplicatePart(doc, sel.id);
       if (!r.ok) return say(r.error, true);
       commit(r.doc);
-      const added = sel.kind === "room" ? r.doc.rooms.at(-1)! : r.doc.parts.at(-1)!;
+      const added =
+        sel.kind === "room" ? r.doc.rooms.at(-1)! : sel.kind === "furniture" ? r.doc.furniture!.at(-1)! : r.doc.parts.at(-1)!;
       setSelection({ kind: sel.kind, id: added.id });
       say("Duplicated");
     },
     [selection, doc, commit, say],
   );
   const rotate = useCallback(() => {
-    if (selection?.kind !== "room") return;
-    const r = rotateRoom(doc, selection.id);
+    if (!selection || selection.kind === "part") return;
+    const r = selection.kind === "room" ? rotateRoom(doc, selection.id) : rotateFurniture(doc, selection.id);
     if (!r.ok) return say(r.error, true);
     commit(r.doc);
     say("Rotated 90°");
@@ -364,6 +428,11 @@ export default function Editor() {
         const r = moveRoom(doc, selection.id, dx * step, dz * step, step);
         if (r.ok) commit(r.doc);
         else say(r.error, true);
+      } else if (selection.kind === "furniture") {
+        const f = doc.furniture?.find((q) => q.id === selection.id);
+        if (!f) return;
+        const r = moveFurniture(doc, f.id, f.x + dx * Math.min(step, 0.1), f.z + dz * Math.min(step, 0.1), 0.01);
+        if (r.ok) commit(r.doc);
       } else {
         const p = doc.parts.find((q) => q.id === selection.id);
         if (!p) return;
@@ -413,11 +482,19 @@ export default function Editor() {
     e.preventDefault();
     const raw = e.dataTransfer.getData(DND);
     if (!raw) return;
-    const item = JSON.parse(raw) as { kind: "preset" | "part"; id: string };
+    const item = JSON.parse(raw) as { kind: "preset" | "part" | "furniture"; id: string };
     const at = api.current?.floorAt(e.clientX, e.clientY);
     if (!at) return;
-    if (item.kind === "preset") {
-      const p = ROOM_PRESETS.find((q) => q.id === item.id)!;
+    if (item.kind === "furniture") {
+      const t = item.id as FurnitureType;
+      const r = addFurniture(doc, t, at[0], at[1], Math.min(step, 0.1));
+      apply(r, `Placed ${FURNITURE[t].label}`);
+      if (r.ok) setSelection({ kind: "furniture", id: r.doc.furniture!.at(-1)!.id });
+    } else if (item.kind === "preset") {
+      const p =
+        item.id === "custom"
+          ? { id: "custom", label: `Custom ${custom.w} × ${custom.d}`, ...custom }
+          : ROOM_PRESETS.find((q) => q.id === item.id)!;
       const r = placePreset(doc, p, at[0], at[1], step);
       apply(r, `Added ${p.label}`);
       if (r.ok) setSelection({ kind: "room", id: r.doc.rooms.at(-1)!.id });
@@ -458,7 +535,21 @@ export default function Editor() {
     `flex w-full cursor-grab items-center gap-2 rounded-md border px-2 py-1.5 text-left text-[11px] transition active:cursor-grabbing ${
       active ? "border-amber-400 bg-amber-400/10 text-amber-200" : "border-slate-700 bg-slate-900/90 text-slate-300 hover:border-slate-500"
     }`;
-  const hintKey = tool.startsWith("place:") ? "place" : tool.startsWith("preset:") ? "preset" : tool;
+  const hintKey = tool.startsWith("place:")
+    ? "place"
+    : tool.startsWith("preset:")
+      ? "preset"
+      : tool.startsWith("furn:")
+        ? "furn"
+        : tool;
+  const saveImage = () => {
+    const url = api.current?.capture();
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `wirelab-${mode}-${lighting}.png`;
+    a.click();
+  };
 
   return (
     <main className="grid flex-1 lg:grid-cols-[1fr_440px]">
@@ -477,7 +568,14 @@ export default function Editor() {
           focus={focus}
           view={view}
           camera={[5, 16, 15]}
+          furniture={shown.furniture}
+          ceiling={ceiling}
+          mode={mode}
+          lighting={lighting}
+          cutaway={cutaway}
+          showWiring={showWiring}
           editor={{
+            onFurnitureDown,
             rotate: tool === "select" || tool === "wire",
             selection,
             dragging: !!drag && drag.kind !== "draw",
@@ -529,7 +627,18 @@ export default function Editor() {
               ))}
             </select>
           </label>
-          <div className="ml-auto flex overflow-hidden rounded-md border border-slate-700 text-[11px]">
+          <div className="ml-auto flex overflow-hidden rounded-md border border-amber-400/60 text-[11px]">
+            {(["edit", "render"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={`px-2.5 py-1 capitalize ${mode === m ? "bg-amber-400 text-slate-900" : "bg-slate-900/90 text-slate-300"}`}
+              >
+                {m === "edit" ? "✎ Edit" : "◐ Render"}
+              </button>
+            ))}
+          </div>
+          <div className="flex overflow-hidden rounded-md border border-slate-700 text-[11px]">
             {(["home", "top", "front", "fit"] as ViewName[]).map((v) => (
               <button
                 key={v}
@@ -541,6 +650,31 @@ export default function Editor() {
             ))}
           </div>
         </div>
+
+        {mode === "render" && (
+          <div className="absolute right-3 top-12 flex flex-wrap items-center justify-end gap-1.5 text-[11px]">
+            <div className="flex overflow-hidden rounded-md border border-slate-700">
+              {(["day", "night"] as const).map((l) => (
+                <button
+                  key={l}
+                  onClick={() => setLighting(l)}
+                  className={`px-2.5 py-1 ${lighting === l ? "bg-slate-200 text-slate-900" : "bg-slate-900/90 text-slate-300"}`}
+                >
+                  {l === "day" ? "☀ Day" : "☾ Night"}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setCutaway(!cutaway)} className={`${btn(cutaway)} bg-slate-900/90`}>
+              Cutaway walls
+            </button>
+            <button onClick={() => setShowWiring(!showWiring)} className={`${btn(showWiring)} bg-slate-900/90`}>
+              Show wiring
+            </button>
+            <button onClick={saveImage} className={`${btn(false)} bg-slate-900/90`}>
+              ⤓ Save image
+            </button>
+          </div>
+        )}
 
         {/* Shape library */}
         <div className="absolute bottom-14 left-3 top-14 flex w-40 flex-col gap-3 overflow-y-auto pr-1">
@@ -559,6 +693,68 @@ export default function Editor() {
                   style={{ width: p.w * 5, height: p.d * 5 }}
                 />
                 {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-col gap-1 rounded-md border border-slate-700 bg-slate-900/90 p-1.5">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Custom room</p>
+            <div className="flex items-center gap-1 font-mono text-[11px] text-slate-400">
+              <input
+                type="number"
+                min={1}
+                max={20}
+                step={0.5}
+                value={custom.w}
+                onChange={(e) => setCustom({ ...custom, w: Math.max(1, Number(e.target.value) || 1) })}
+                className="w-12 rounded border border-slate-700 bg-slate-950 px-1 py-0.5 text-slate-200"
+                aria-label="Custom room width (m)"
+              />
+              ×
+              <input
+                type="number"
+                min={1}
+                max={20}
+                step={0.5}
+                value={custom.d}
+                onChange={(e) => setCustom({ ...custom, d: Math.max(1, Number(e.target.value) || 1) })}
+                className="w-12 rounded border border-slate-700 bg-slate-950 px-1 py-0.5 text-slate-200"
+                aria-label="Custom room depth (m)"
+              />
+              m
+            </div>
+            <select
+              value={custom.kind}
+              onChange={(e) => setCustom({ ...custom, kind: e.target.value as RoomKind })}
+              className="rounded border border-slate-700 bg-slate-950 px-1 py-0.5 text-[11px] text-slate-200"
+              aria-label="Custom room type"
+            >
+              {ROOM_KINDS.map((k) => (
+                <option key={k.kind} value={k.kind}>
+                  {k.label}
+                </option>
+              ))}
+            </select>
+            <button
+              draggable
+              onDragStart={(e) => e.dataTransfer.setData(DND, JSON.stringify({ kind: "preset", id: "custom" }))}
+              onClick={() => setTool("preset:custom")}
+              className={tile(tool === "preset:custom")}
+            >
+              ＋ Drop {custom.w} × {custom.d} m
+            </button>
+          </div>
+          <div className="flex flex-col gap-1">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Furniture</p>
+            {(Object.keys(FURNITURE) as FurnitureType[]).map((t) => (
+              <button
+                key={t}
+                draggable
+                onDragStart={(e) => e.dataTransfer.setData(DND, JSON.stringify({ kind: "furniture", id: t }))}
+                onClick={() => setTool(`furn:${t}`)}
+                className={tile(tool === `furn:${t}`)}
+              >
+                <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: FURNITURE[t].color }} />
+                {FURNITURE[t].label}
               </button>
             ))}
           </div>
@@ -643,8 +839,67 @@ export default function Editor() {
               <Num label="Depth (m)" value={selRoom.d} step={step} onCommit={(v) => apply(resizeRoom(doc, selRoom.id, { ...selRoom, d: v }))} />
             </div>
             <p className="mt-2 font-mono text-[11px] text-slate-500">
-              {(selRoom.w * selRoom.d).toFixed(1)} m² · {doc.parts.filter((p) => p.roomId === selRoom.id).length} parts
+              {(selRoom.w * selRoom.d).toFixed(1)} m² · {doc.parts.filter((p) => p.roomId === selRoom.id).length} parts ·{" "}
+              {(doc.furniture ?? []).filter((f) => f.roomId === selRoom.id).length} furniture
             </p>
+            {(() => {
+              const fin = defaultFinish(selRoom);
+              const floor = selRoom.floor ?? fin.floor;
+              const wall = selRoom.wall ?? fin.wall;
+              return (
+                <div className="mt-3 flex flex-col gap-2">
+                  <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-slate-500">
+                    Floor
+                    <div className="flex gap-1.5">
+                      <select
+                        value={floor.kind}
+                        onChange={(e) => {
+                          const k = e.target.value as FloorKind;
+                          commit(setFinish(doc, selRoom.id, { floor: { kind: k, color: FLOOR_KINDS.find((f) => f.kind === k)!.color } }));
+                        }}
+                        className="flex-1 rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs normal-case tracking-normal text-slate-200"
+                      >
+                        {FLOOR_KINDS.map((f) => (
+                          <option key={f.kind} value={f.kind}>
+                            {f.label}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="color"
+                        value={floor.color}
+                        onChange={(e) => setDocState(setFinish(doc, selRoom.id, { floor: { ...floor, color: e.target.value } }))}
+                        onFocus={() => commit(doc)}
+                        className="h-7 w-9 cursor-pointer rounded border border-slate-700 bg-slate-900"
+                        aria-label="Floor colour"
+                      />
+                    </div>
+                  </label>
+                  <div className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-slate-500">
+                    Wall paint
+                    <div className="flex flex-wrap items-center gap-1">
+                      {WALL_PAINTS.map((c) => (
+                        <button
+                          key={c}
+                          onClick={() => commit(setFinish(doc, selRoom.id, { wall: c }))}
+                          className={`h-6 w-6 rounded border ${wall === c ? "border-amber-400 ring-1 ring-amber-400" : "border-slate-600"}`}
+                          style={{ background: c }}
+                          aria-label={`Paint ${c}`}
+                        />
+                      ))}
+                      <input
+                        type="color"
+                        value={wall}
+                        onChange={(e) => setDocState(setFinish(doc, selRoom.id, { wall: e.target.value }))}
+                        onFocus={() => commit(doc)}
+                        className="h-6 w-8 cursor-pointer rounded border border-slate-700 bg-slate-900"
+                        aria-label="Custom wall colour"
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
             <div className="mt-2 flex flex-wrap gap-1.5">
               <button onClick={rotate} className={btn(false)} title="R">
                 ⟳ Rotate 90°
@@ -687,6 +942,52 @@ export default function Editor() {
                   ⧉ Duplicate
                 </button>
               )}
+              <button onClick={del} className={`${btn(false)} hover:border-red-500 hover:text-red-300`} title="Delete">
+                ✕ Delete
+              </button>
+            </div>
+          </div>
+        )}
+
+        {selFurn && (
+          <div className="rounded-md border border-amber-400/40 bg-amber-400/5 p-3">
+            <H2>Selected furniture</H2>
+            <p className="text-sm text-slate-200">
+              {FURNITURE[selFurn.type].label}
+              <span className="text-slate-500"> · {shown.rooms.find((r) => r.id === selFurn.roomId)?.name}</span>
+            </p>
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              {(["w", "d", "h"] as const).map((k) => (
+                <Num
+                  key={k}
+                  label={`${{ w: "Width", d: "Depth", h: "Height" }[k]} (m)`}
+                  value={selFurn[k]}
+                  step={0.05}
+                  onCommit={(v) => apply(resizeFurniture(doc, selFurn.id, { [k]: v }))}
+                />
+              ))}
+            </div>
+            <p className="mt-1 font-mono text-[10px] text-slate-500">
+              W {FURNITURE[selFurn.type].limits.w.join("–")} · D {FURNITURE[selFurn.type].limits.d.join("–")} · H{" "}
+              {FURNITURE[selFurn.type].limits.h.join("–")} m · facing {selFurn.rot}°
+            </p>
+            <label className="mt-2 flex items-center gap-2 text-[10px] uppercase tracking-wider text-slate-500">
+              Colour
+              <input
+                type="color"
+                value={selFurn.color}
+                onChange={(e) => setDocState(setFurnitureColor(doc, selFurn.id, e.target.value))}
+                onFocus={() => commit(doc)}
+                className="h-7 w-10 cursor-pointer rounded border border-slate-700 bg-slate-900"
+              />
+            </label>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <button onClick={rotate} className={btn(false)} title="R">
+                ⟳ Rotate 90°
+              </button>
+              <button onClick={() => duplicate()} className={btn(false)} title="Ctrl+D">
+                ⧉ Duplicate
+              </button>
               <button onClick={del} className={`${btn(false)} hover:border-red-500 hover:text-red-300`} title="Delete">
                 ✕ Delete
               </button>
@@ -761,6 +1062,14 @@ export default function Editor() {
               className="w-20 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-slate-200"
             />
           </label>
+          <div className="mt-2 w-48">
+            <Num
+              label={`Ceiling height (m), ${CEILING_RANGE.join("–")}`}
+              value={ceiling}
+              step={0.1}
+              onCommit={(v) => apply(setCeiling(doc, v), `Ceiling set to ${v} m — wire runs updated`)}
+            />
+          </div>
         </div>
 
         {built.ok && schedule ? (

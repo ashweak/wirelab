@@ -5,13 +5,14 @@ import { toProject } from "./editor";
 import { PART_INFO, type EditorDoc, type V3 } from "./parts";
 
 /** Conduit runs just under the ceiling slab. */
-export const CONDUIT_Y = CEILING - 0.08;
+export const CONDUIT_DROP = 0.08;
+export const CONDUIT_Y = CEILING - CONDUIT_DROP;
 const EPS = 0.02;
 const TAIL_M = 0.3; // wire left at each device for terminations
 
-const onSameWall = (a: V3, b: V3) =>
-  a[1] < CEILING - 0.2 &&
-  b[1] < CEILING - 0.2 &&
+const onSameWall = (a: V3, b: V3, ceiling = CEILING) =>
+  a[1] < ceiling - 0.2 &&
+  b[1] < ceiling - 0.2 &&
   (Math.abs(a[0] - b[0]) < EPS || Math.abs(a[2] - b[2]) < EPS);
 
 /**
@@ -19,20 +20,25 @@ const onSameWall = (a: V3, b: V3) =>
  * Same wall: along the wall at the first device's height, then up/down to the second.
  * Otherwise: up to the ceiling, across in x, across in z, down.
  */
-export function segPath(a: V3, b: V3): V3[] {
-  if (onSameWall(a, b)) return [a, [b[0], a[1], b[2]], b];
-  return [a, [a[0], CONDUIT_Y, a[2]], [b[0], CONDUIT_Y, a[2]], [b[0], CONDUIT_Y, b[2]], b];
+export function segPath(a: V3, b: V3, ceiling = CEILING): V3[] {
+  if (onSameWall(a, b, ceiling)) return [a, [b[0], a[1], b[2]], b];
+  const y = ceiling - CONDUIT_DROP;
+  return [a, [a[0], y, a[2]], [b[0], y, a[2]], [b[0], y, b[2]], b];
 }
 
 /** Length used for wire and voltage drop (measured to the ceiling line). */
-export function segLength(a: V3, b: V3): number {
+export function segLength(a: V3, b: V3, ceiling = CEILING): number {
   const flat = Math.abs(a[0] - b[0]) + Math.abs(a[2] - b[2]);
-  if (onSameWall(a, b)) return flat + Math.abs(a[1] - b[1]);
-  return CEILING - a[1] + flat + (CEILING - b[1]);
+  if (onSameWall(a, b, ceiling)) return flat + Math.abs(a[1] - b[1]);
+  return ceiling - a[1] + flat + (ceiling - b[1]);
 }
 
 /** Hand-wired parts first (by seq), then nearest-neighbour from wherever the chain ends. */
-export function chainOrder<T extends { position: V3; seq?: number }>(panel: V3, parts: T[]): T[] {
+export function chainOrder<T extends { position: V3; seq?: number }>(
+  panel: V3,
+  parts: T[],
+  ceiling = CEILING,
+): T[] {
   const manual = parts.filter((p) => p.seq !== undefined).sort((a, b) => a.seq! - b.seq!);
   const rest = parts.filter((p) => p.seq === undefined);
   const out = [...manual];
@@ -40,7 +46,7 @@ export function chainOrder<T extends { position: V3; seq?: number }>(panel: V3, 
   while (rest.length) {
     let best = 0;
     for (let i = 1; i < rest.length; i++)
-      if (segLength(at, rest[i].position) < segLength(at, rest[best].position)) best = i;
+      if (segLength(at, rest[i].position, ceiling) < segLength(at, rest[best].position, ceiling)) best = i;
     const [p] = rest.splice(best, 1);
     out.push(p);
     at = p.position;
@@ -49,24 +55,24 @@ export function chainOrder<T extends { position: V3; seq?: number }>(panel: V3, 
 }
 
 /** Segments for the engine: length of each hop and the load still downstream of it. */
-export function chainSegments(panel: V3, ordered: { position: V3; va: number }[]) {
+export function chainSegments(panel: V3, ordered: { position: V3; va: number }[], ceiling = CEILING) {
   return ordered.map((p, i) => ({
-    lengthM: segLength(i === 0 ? panel : ordered[i - 1].position, p.position),
+    lengthM: segLength(i === 0 ? panel : ordered[i - 1].position, p.position, ceiling),
     downstreamVA: ordered.slice(i).reduce((s, x) => s + x.va, 0),
   }));
 }
 
 /** Polylines for drawing a chained circuit. */
-export function chainPaths(panel: V3, ordered: { position?: V3 }[]): V3[][] {
+export function chainPaths(panel: V3, ordered: { position?: V3 }[], ceiling = CEILING): V3[][] {
   const pts = ordered.filter((p) => p.position).map((p) => p.position!);
-  return pts.map((p, i) => segPath(i === 0 ? panel : pts[i - 1], p));
+  return pts.map((p, i) => segPath(i === 0 ? panel : pts[i - 1], p, ceiling));
 }
 
 /** Ceiling points where a conduit drops down a wall to a device (junction boxes). */
-export function dropPoints(paths: V3[][]): V3[] {
+export function dropPoints(paths: V3[][], ceiling = CEILING): V3[] {
   return paths
-    .filter((p) => p.length === 5 && p[4][1] < CEILING - 0.2)
-    .map((p) => [p[4][0], CONDUIT_Y, p[4][2]] as V3);
+    .filter((p) => p.length === 5 && p[4][1] < ceiling - 0.2)
+    .map((p) => [p[4][0], ceiling - CONDUIT_DROP, p[4][2]] as V3);
 }
 
 export function designChecks(doc: EditorDoc): CheckResult[] {
@@ -118,7 +124,8 @@ export function materials(doc: EditorDoc): MaterialLine[] {
     const g = groundFor(r.breakerA);
     ground.set(g, (ground.get(g) ?? 0) + wire);
     conduitM += run;
-    drops += dropPoints(chainPaths(panel.position, c.parts)).length;
+    const ceil = doc.ceilingM ?? CEILING;
+    drops += dropPoints(chainPaths(panel.position, c.parts, ceil), ceil).length;
     breakers.set(r.breakerA, (breakers.get(r.breakerA) ?? 0) + 1);
   });
 

@@ -4,6 +4,8 @@ export type RoomKind = "living" | "kitchen" | "bath" | "bedroom" | "other";
 export type EditorPartType = "light" | "switch" | "outlet" | "aircon" | "water_heater" | "panel";
 export type V3 = [number, number, number];
 
+export type FloorKind = "tile" | "wood" | "concrete" | "vinyl";
+
 export interface Room {
   id: string;
   name: string;
@@ -12,6 +14,39 @@ export interface Room {
   z: number;
   w: number;
   d: number;
+  floor?: { kind: FloorKind; color: string };
+  /** Wall paint colour. */
+  wall?: string;
+}
+
+export type FurnitureType =
+  | "bed_single"
+  | "bed_double"
+  | "sofa"
+  | "coffee_table"
+  | "dining_table"
+  | "chair"
+  | "desk"
+  | "wardrobe"
+  | "tv_stand"
+  | "counter"
+  | "fridge"
+  | "toilet"
+  | "vanity"
+  | "shower";
+
+export interface Furniture {
+  id: string;
+  type: FurnitureType;
+  roomId: string;
+  /** Centre of the footprint on the floor. */
+  x: number;
+  z: number;
+  rot: 0 | 90 | 180 | 270;
+  w: number;
+  d: number;
+  h: number;
+  color: string;
 }
 
 export interface EditorPart {
@@ -29,6 +64,9 @@ export interface EditorDoc {
   rooms: Room[];
   parts: EditorPart[];
   feederRunM: number;
+  furniture?: Furniture[];
+  /** Floor-to-ceiling height (m); 2.7 when absent. */
+  ceilingM?: number;
 }
 
 export const PART_INFO: Record<
