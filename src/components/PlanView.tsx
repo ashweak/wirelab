@@ -456,7 +456,7 @@ export default function PlanView(p: Props) {
         break;
       case "plate":
       default:
-        if (t === "switch" || t === "switch_3way") g = text(t === "switch" ? "S" : "S₃", s * 1.4);
+        if (t === "switch" || t === "switch_3way") g = text(t === "switch" ? "S" : (p.print ? "S3" : "S₃"), s * 1.4);
         else if (t === "doorbell") g = (<><rect x={-s * 0.6} y={-s * 0.6} width={s * 1.2} height={s * 1.2} fill={PAPER} stroke={c} />{text("•", s)}</>);
         else if (t === "data_outlet") g = <path d={`M 0 ${-s} L ${s} ${s * 0.8} L ${-s} ${s * 0.8} Z`} fill={PAPER} stroke={c} strokeWidth={1.3} />;
         else if (t === "tv_outlet") g = (<><rect x={-s} y={-s * 0.7} width={s * 2} height={s * 1.4} fill={PAPER} stroke={c} />{text("TV", s * 0.75)}</>);
@@ -727,13 +727,13 @@ export default function PlanView(p: Props) {
             <line x1={0} y1={48} x2={titleW} y2={48} stroke={INK} strokeWidth={0.6} />
             <line x1={170} y1={24} x2={170} y2={titleH} stroke={INK} strokeWidth={0.6} />
             <text x={8} y={16} fontSize={12} fontWeight={700}>{p.title}</text>
-            <text x={8} y={40} fontSize={11}>{circuitMode ? "E-1 · Electrical plan" : "A-1 · Floor plan"}</text>
+            <text x={8} y={40} fontSize={11}>{p.print?.sheet ?? (circuitMode ? "E-1 · Electrical plan" : "A-1 · Floor plan")}</text>
             <text x={8} y={64} fontSize={10}>WireLab PH · draft</text>
-            <text x={178} y={40} fontSize={10}>Scale ≈ 1:{ratio}</text>
-            <text x={178} y={64} fontSize={10}>{new Date().toISOString().slice(0, 10)}</text>
+            <text x={178} y={40} fontSize={10}>{p.print ? `Scale ${p.print.scale}` : `Scale ≈ 1:${ratio}`}</text>
+            <text x={178} y={64} fontSize={10}>{p.print?.date ?? new Date().toISOString().slice(0, 10)}</text>
           </g>
 
-          <g transform={`translate(240 ${size.h - 78})`} fontFamily={MONO} fill={INK}>
+          <g transform={`translate(${p.print ? 50 : 240} ${size.h - 78})`} fontFamily={MONO} fill={INK}>
             {[0, 1, 2, 3].map((i) => (
               <rect key={i} x={(i * px(bar)) / 4} y={0} width={px(bar) / 4} height={6} fill={i % 2 ? PAPER : INK} stroke={INK} strokeWidth={0.8} />
             ))}
@@ -751,7 +751,7 @@ export default function PlanView(p: Props) {
                   ["light", "Ceiling light"],
                   ["downlight", "LED downlight"],
                   ["ceiling_fan", "Ceiling fan"],
-                  ["switch", "Switch (S₃ = 3-way)"],
+                  ["switch", p.print ? "Switch (S3 = 3-way)" : "Switch (S₃ = 3-way)"],
                   ["outlet", "Duplex outlet"],
                   ["range_outlet", "Dedicated outlet (R/RF/WM)"],
                   ["aircon", "Appliance (AC/WH/EV/P)"],

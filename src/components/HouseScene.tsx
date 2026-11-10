@@ -148,7 +148,7 @@ function Conduit({ path, color, opacity, glow }: { path: V3[]; color: string; op
 }
 
 /** Device models, drawn ~2x real size so they read at house scale. */
-function Device({
+export function Device({
   d,
   tint,
   on,

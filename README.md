@@ -54,3 +54,13 @@ Rule values in [`src/engine/rules.ts`](src/engine/rules.ts) are a **draft** and 
 ---
 
 Built by [Lance Agua](https://ashweak.github.io).
+
+## Drafting, inventory and PDF
+
+- **AutoCAD-style drafting** (✏ Draft, floor or circuit plan): type commands in the command line — `L` line, `PL` polyline, `REC` rectangle, `C` circle, `A` 3-point arc, `W` wall (uses the chosen wall system, shows in 3D and in the estimate), `T` text, `DLI` linear dimension, `DI` distance, `M` move, `CO` copy, `RO` rotate, `MI` mirror, `SC` scale, `O` offset, `E` erase, `U` undo. Points take `x,y`, `@dx,dy` or `@length<angle`; Enter/Space repeats or ends. OSNAP (F3: endpoint, midpoint, center, intersection), ORTHO (F8), SNAP (F9). Window select left→right, crossing select right→left. Layers with on/off, lock, colour and current layer.
+- **Inventory**: the library is a slot grid. Rest the cursor on a slot for 0.6 s to see the item in 3D, turning slowly through 360°. Wall systems, floor finishes and ceilings are slots too: click one with a room selected, or drag it onto a room.
+- **PDF export** (⎙ PDF): A4–A0, B4/B3, Letter, Legal, Long bond, Tabloid, ARCH A–E, ANSI C–E; portrait or landscape; plans at a true standard scale (1:10 to 1:1000, or the largest that fits). Sheets: floor plan, electrical plan, schedules/checks/materials/estimate, and the current 3D view.
+
+![Drafting](docs/drafting.png)
+![Inventory preview](docs/inventory.png)
+![PDF sheets](docs/pdf-sheets.png)

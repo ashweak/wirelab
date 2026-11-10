@@ -55,12 +55,15 @@ import {
 } from "@/editor/interior";
 import { PART_TYPES, type Draft, type FloorKind, type FurnitureType } from "@/editor/parts";
 import { ChecksView, EstimateView, H2, MaterialsTable, ScheduleTable } from "./ScheduleView";
-import { CEILING_MATERIALS, WALL_MATERIALS, WALL_OF, estimate } from "@/editor/construction";
+import { CEILING_MATERIALS, FLOOR_MATERIALS, WALL_MATERIALS, WALL_OF, estimate } from "@/editor/construction";
 import type { Corner, SceneApi, ViewMode, ViewName } from "./HouseScene";
 import { deviceFor, sceneCircuits } from "./sceneData";
 import { ViewToggle } from "./ViewToggle";
 import PlanView, { type PlanApi } from "./PlanView";
 import ErrorBoundary from "./ErrorBoundary";
+import PdfDialog from "./PdfExport";
+import { SlotGrid, itemLabel, useItemPreview } from "./Inventory";
+import type { InvItem } from "./ItemPreview";
 import {
   DEFAULT_LAYERS,
   area as cadArea,
@@ -243,6 +246,9 @@ export default function Editor() {
   const [showWiring, setShowWiring] = useState(false);
   const [custom, setCustom] = useState({ w: 3.5, d: 3, kind: "bedroom" as RoomKind });
   const [query, setQuery] = useState("");
+  const [pdfOpen, setPdfOpen] = useState(false);
+  const [libView, setLibView] = useState<"slots" | "list">("slots");
+  const preview3d = useItemPreview();
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Rooms", "⚡ Lighting", "⚡ Power"]));
   const toggleGroup = (g: string) =>
     setOpenGroups((o) => {
@@ -705,10 +711,15 @@ export default function Editor() {
     e.preventDefault();
     const raw = e.dataTransfer.getData(DND);
     if (!raw) return;
-    const item = JSON.parse(raw) as { kind: "preset" | "part" | "furniture"; id: string };
+    const item = JSON.parse(raw) as { kind: "preset" | "part" | "furniture" | "material"; id: string };
     const at = viewKind === "3d" ? api.current?.floorAt(e.clientX, e.clientY) : planApi.current?.floorAt(e.clientX, e.clientY);
     if (!at) return;
-    if (item.kind === "furniture") {
+    if (item.kind === "material") {
+      const [kind, id] = item.id.split(":");
+      const room = roomAt(doc.rooms, at[0], at[1]);
+      if (room) setSelection({ kind: "room", id: room.id });
+      applyMaterial({ kind, id } as InvItem, room?.id);
+    } else if (item.kind === "furniture") {
       const t = item.id as FurnitureType;
       const r = addFurniture(doc, t, at[0], at[1], Math.min(step, 0.1));
       apply(r, `Placed ${FURNITURE[t].label}`);
@@ -784,6 +795,38 @@ export default function Editor() {
       {FURNITURE[t].label}
     </button>
   );
+  const applyMaterial = (item: InvItem, roomId: string | undefined) => {
+    const room = shown.rooms.find((r) => r.id === roomId);
+    if (!room) return say("Select a room first, then click a material — or drag the material onto a room", true);
+    if (item.kind === "wall") commit(setRoomMaterials(doc, room.id, { wallMat: item.id }));
+    else if (item.kind === "ceiling") commit(setRoomMaterials(doc, room.id, { ceilingMat: item.id }));
+    else if (item.kind === "floor")
+      commit(setFinish(doc, room.id, { floor: { kind: item.id, color: FLOOR_MATERIALS.find((f) => f.id === item.id)!.color } }));
+    else return;
+    say(`${room.name}: ${itemLabel(item)}`);
+  };
+  const isMaterial = (i: InvItem) => i.kind === "wall" || i.kind === "floor" || i.kind === "ceiling";
+  const slotActive = (i: InvItem) =>
+    i.kind === "part"
+      ? tool === `place:${i.id}`
+      : i.kind === "furniture"
+        ? tool === `furn:${i.id}`
+        : !!selRoom &&
+          ((i.kind === "wall" && (selRoom.wallMat ?? "chb100") === i.id) ||
+            (i.kind === "ceiling" && (selRoom.ceilingMat ?? "gypsum") === i.id) ||
+            (i.kind === "floor" && selRoom.floor?.kind === i.id));
+  const slotPick = (i: InvItem) =>
+    i.kind === "part" ? setTool(`place:${i.id}`) : i.kind === "furniture" ? setTool(`furn:${i.id}`) : applyMaterial(i, selRoom?.id);
+  const slotDrag = (i: InvItem) =>
+    JSON.stringify(isMaterial(i) ? { kind: "material", id: `${i.kind}:${i.id}` } : { kind: i.kind, id: i.id });
+  const slots = (items: InvItem[]) => (
+    <SlotGrid items={items} isActive={slotActive} onPick={slotPick} dragData={slotDrag} bind={preview3d.bind} />
+  );
+  const MATERIAL_GROUPS: [string, InvItem[]][] = [
+    ["🧱 Wall systems", WALL_MATERIALS.map((m) => ({ kind: "wall", id: m.id }))],
+    ["▦ Floor finishes", FLOOR_MATERIALS.map((m) => ({ kind: "floor", id: m.id }))],
+    ["▭ Ceilings", CEILING_MATERIALS.map((m) => ({ kind: "ceiling", id: m.id }))],
+  ];
   const hintKey = tool.startsWith("place:")
     ? "place"
     : tool.startsWith("preset:")
@@ -1028,7 +1071,28 @@ export default function Editor() {
               ⤢ Fit sheet
             </button>
           )}
+          <button onClick={() => setPdfOpen(true)} className={`${btn(false)} bg-slate-900/90`} title="Export plans, schedules and 3D view to PDF">
+            ⎙ PDF
+          </button>
         </div>
+        {pdfOpen && (
+          <PdfDialog
+            src={{
+              doc: shown,
+              draft,
+              circuits,
+              schedule,
+              panel,
+              loose: built.ok ? [] : shown.parts.filter((q) => q.type !== "panel").map((q) => deviceFor(q, shown.rooms)),
+              title: doc.rooms.length ? `WireLab project · ${doc.rooms.length} rooms` : "WireLab project",
+              bom,
+              est,
+              capture3d: viewKind === "3d" ? () => api.current?.capture() ?? null : null,
+            }}
+            onClose={() => setPdfOpen(false)}
+            onDone={(m, bad) => say(m, bad)}
+          />
+        )}
 
         {viewKind === "3d" && mode === "render" && (
           <div className="absolute right-3 top-12 flex flex-wrap items-center justify-end gap-1.5 text-[11px]">
@@ -1063,6 +1127,22 @@ export default function Editor() {
             placeholder="Search library…"
             className="sticky top-0 z-10 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-200 placeholder:text-slate-500"
           />
+          <div className="flex overflow-hidden rounded border border-slate-700 text-[10px]">
+            {(
+              [
+                ["slots", "▦ Inventory"],
+                ["list", "☰ List"],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={v}
+                onClick={() => setLibView(v)}
+                className={`flex-1 px-2 py-0.5 ${libView === v ? "bg-amber-400/20 text-amber-200" : "bg-slate-900/90 text-slate-400"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {query.trim() ? (
             <div className="flex flex-col gap-1">
               {[
@@ -1151,7 +1231,7 @@ export default function Editor() {
                 const items = PART_TYPES.filter((t) => PART_INFO[t].group === g);
                 return (
                   <Group key={g} title={`⚡ ${g}`} open={openGroups} toggle={toggleGroup} count={items.length}>
-                    {items.map((t) => partTile(t))}
+                    {libView === "slots" ? slots(items.map((id) => ({ kind: "part", id }))) : items.map((t) => partTile(t))}
                   </Group>
                 );
               })}
@@ -1159,10 +1239,15 @@ export default function Editor() {
                 const items = Object.keys(FURNITURE).filter((t) => FURNITURE[t].group === g);
                 return (
                   <Group key={g} title={g} open={openGroups} toggle={toggleGroup} count={items.length}>
-                    {items.map((t) => furnTile(t))}
+                    {libView === "slots" ? slots(items.map((id) => ({ kind: "furniture", id }))) : items.map((t) => furnTile(t))}
                   </Group>
                 );
               })}
+              {MATERIAL_GROUPS.map(([g, items]) => (
+                <Group key={g} title={g} open={openGroups} toggle={toggleGroup} count={items.length}>
+                  {slots(items)}
+                </Group>
+              ))}
             </>
           )}
           <p className="text-[10px] leading-snug text-slate-500">
@@ -1236,6 +1321,7 @@ export default function Editor() {
         >
           {HINT[hintKey]}
         </p>
+        {preview3d.popover}
       </section>
 
       <aside className="flex flex-col gap-5 overflow-y-auto p-5 lg:max-h-[calc(100vh-118px)]">
@@ -1630,6 +1716,9 @@ export default function Editor() {
             )}
             <button onClick={exportJson} className={btn(false)}>
               Export JSON
+            </button>
+            <button onClick={() => setPdfOpen(true)} className={btn(false)}>
+              Export PDF
             </button>
             <button onClick={() => fileRef.current?.click()} className={btn(false)}>
               Import JSON

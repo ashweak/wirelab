@@ -12,9 +12,12 @@
   "dependencies": {
     "@react-three/drei": "^10.7.9",
     "@react-three/fiber": "^9.8.2",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.9",
     "next": "16.4.6",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "svg2pdf.js": "^2.9.0",
     "three": "^0.187.0",
     "zustand": "^5.1.0"
   },
