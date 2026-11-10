@@ -135,7 +135,9 @@ export function computeSchedule(project: Project, rules: Rules = RULES): Schedul
   const loadVA =
     circuits.reduce((s, c) => s + c.loadVA, 0) + largestMotor * rules.largestMotorExtra;
   const currentA = loadVA / rules.voltage;
-  const breakerA = nextBreaker(currentA, rules.minimums.feeder.breaker, rules);
+  // The main must be at least as large as the largest branch breaker it feeds.
+  const largestBranch = Math.max(rules.minimums.feeder.breaker, ...circuits.map((c) => c.breakerA));
+  const breakerA = nextBreaker(currentA, largestBranch, rules);
   const feederMm2 = wireFor(breakerA, rules.minimums.feeder.wire, rules);
   const { dropPct } = voltageDrop(currentA, project.feederRunM, feederMm2, rules);
 

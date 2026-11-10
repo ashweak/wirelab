@@ -10,7 +10,7 @@ One-storey residential, single-phase 230 V, one panelboard, up to ~15 branch cir
 
 ## Definition of done
 
-- [ ] Draw the golden house's 6 rooms and place all 31 parts (30 outlets + panel) in under 10 minutes
+- [x] Draw the golden house's 6 rooms and place all 31 parts (30 outlets + panel) in under 10 minutes
 - [x] Every part sits on exactly one of 5 circuits back to one panel
 - [x] Load schedule matches the table below to the nearest 1 VA and 0.1 A
 - [x] All must-fail cases raise the named warning, and the suggested fix clears it
@@ -46,14 +46,23 @@ One-storey residential, single-phase 230 V, one panelboard, up to ~15 branch cir
 3. Branch breaker = smallest standard rating ≥ 1.25 × I, minimum 15 A lighting / 20 A outlets and appliances.
 4. Wire = smallest conductor allowed behind the breaker; minimum 2.0 mm² lighting, 3.5 mm² outlets and appliances.
 5. Voltage drop %VD = 2·I·L·R / 230 × 100; ≤ 3% branch, ≤ 5% feeder + branch.
-6. Main = all circuit loads + 25% of the largest motor; main breaker = next standard ≥ main current.
+6. Main = all circuit loads + 25% of the largest motor; main breaker = next standard ≥ main current, and never below the largest branch breaker.
 7. Every aircon needs its own appliance circuit.
+
+## Editor rules (step 3)
+
+- Rooms snap to a 0.5 m grid, are at least 1 m × 1 m, and may share walls but not overlap.
+- Parts go inside a room. Lights mount on the ceiling; outlets, aircon, water heater and panel snap to the nearest wall at 0.3 m (1.1 m in kitchens), 2.1 m, 1.8 m and 1.5 m.
+- One panelboard per house; placing another moves it.
+- Auto-circuits: lights up to 12 per circuit, outlets up to 8, every aircon or water heater on its own circuit.
+- Run length = panel → up to ceiling → across → down to the farthest part, rounded up to 0.5 m.
+- Acceptance: rebuilding the golden house in the editor gives the same loads, breakers, wires and main as the spec, with no warnings.
 
 ## Build order (worked backward)
 
 1. **PEC engine + tests** — done when `npm test` is green. ✅
 2. **Live demo** — golden house in 3D, load schedule, must-fail toggles, breaker-trip demo. ✅
-3. **Editor** — draw rooms on a grid, place parts with snapping.
+3. **Editor** — draw rooms on a grid, place parts with snapping. ✅ (tests: `src/editor/editor.test.ts`)
 4. **Wiring** — draw wire paths in 3D; run length measured from the path.
 5. **Outputs** — PDF load schedule, single-line diagram, BOM with PHP prices.
 

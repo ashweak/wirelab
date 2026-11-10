@@ -91,4 +91,13 @@ describe("must-fail cases", () => {
     p.circuits[4].wireMm2 = 3.5;
     expect(computeSchedule(p).checks.map((c) => c.code)).toContain("OVERLOAD");
   });
+
+  it("never sizes the main below the largest branch breaker", () => {
+    const p = goldenHouse();
+    p.circuits = [p.circuits[0], p.circuits[1]]; // 1,200 VA lighting + 1,440 VA outlets = 11.5 A
+    const s = computeSchedule(p);
+    expect(s.main.currentA).toBeLessThan(15);
+    expect(s.main.breakerA).toBe(20);
+    expect(s.main.feederMm2).toBe(3.5);
+  });
 });

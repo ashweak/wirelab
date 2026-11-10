@@ -13,6 +13,7 @@ A browser 3D wiring lab for Filipino electrical engineers: place parts in a hous
 - Live checks with suggested fixes: `VD-BRANCH-3`, `VD-TOTAL-5`, `WIRE-UNDERSIZED`, `OVERLOAD`, `DEDICATED-CIRCUIT`
 - Fail/fix scenarios that show each check firing and clearing
 - Demo mode: plug appliances into the bedroom circuit until its breaker trips
+- **Design your own:** draw rooms on a grid, place panel, lights, outlets, aircon and water heater (snapped to code mounting heights), and get auto-grouped circuits with a live load schedule; undo, autosave, JSON import/export
 
 ## Built backward from a spec
 
