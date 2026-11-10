@@ -66,12 +66,22 @@ One-storey residential, single-phase 230 V, one panelboard, up to ~15 branch cir
 - Switches mount at 1.4 m, ride on the lighting circuit of their room, and a room with lights but no switch raises a `NO-SWITCH` design warning.
 - Materials: line + neutral at circuit wire size, ground 2.0 mm² up to 20 A (3.5 mm² up to 60 A); wire = run + 0.3 m per device; conduit in 3 m lengths; utility boxes per wall device; octagonal boxes per light and per ceiling drop.
 
+## Editing rules (Tinkercad-style)
+
+- Moving a room carries its parts; moves and resizes snap to the chosen grid (0.1–1 m) and are refused if rooms would overlap.
+- Resizing keeps every wall part on its own wall and clamps parts inside the new outline.
+- Rotate turns a room 90° clockwise about its centre; parts follow to the matching wall.
+- Moving a part into another room re-snaps it to that room's nearest wall and keeps any custom mounting height.
+- Mounting-height ranges: outlet 0.2–1.5 m, switch 1.0–1.6 m, aircon 1.8–2.5 m, water heater 1.5–2.2 m, panel 1.2–1.8 m.
+- Duplicating a part offsets it 0.5 m along its wall; duplicating a room copies its parts into the first free spot beside it.
+
 ## Build order (worked backward)
 
 1. **PEC engine + tests** — done when `npm test` is green. ✅
 2. **Live demo** — golden house in 3D, load schedule, must-fail toggles, breaker-trip demo. ✅
 3. **Editor** — draw rooms on a grid, place parts with snapping. ✅ (tests: `src/editor/editor.test.ts`)
 4. **Wiring** — daisy-chained circuits, hand-drawn wiring order, per-segment voltage drop, switches, materials. ✅ (tests: `src/editor/wiring.test.ts`)
-5. **Outputs** — PDF load schedule, single-line diagram, BOM with PHP prices.
+5. **Tinkercad-style editing** — shape library with drag-and-drop, select/move/resize/rotate/duplicate, properties panel, shortcuts, redo, snap setting, view presets. ✅ (tests: `src/editor/transform.test.ts`)
+6. **Outputs** — PDF load schedule, single-line diagram, BOM with PHP prices.
 
 Each step is one instruction: "make the tests for step N pass, following SPEC.md".

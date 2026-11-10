@@ -1,9 +1,10 @@
 "use client";
 
-import { Canvas, type ThreeEvent } from "@react-three/fiber";
+import { Canvas, useThree, type ThreeEvent } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
-import { useEffect, useMemo } from "react";
-import { CanvasTexture, SRGBColorSpace } from "three";
+import { useEffect, useMemo, useRef, type MutableRefObject } from "react";
+import { BoxGeometry as BoxGeometryImpl, CanvasTexture, Plane, Raycaster, SRGBColorSpace, Vector2, Vector3 } from "three";
+import type { OrbitControls as OrbitImpl } from "three-stdlib";
 import { CEILING } from "@/data/goldenHouse";
 import type { V3 } from "@/editor/editor";
 import { colorFor } from "./colors";
@@ -12,8 +13,25 @@ import type { SceneCircuit, SceneDevice, SceneRoom } from "./sceneData";
 export type { V3 };
 export type ViewMode = "real" | "circuit";
 
+export type Corner = "nw" | "ne" | "sw" | "se";
+export type ViewName = "home" | "top" | "front" | "fit";
+
+export interface SceneApi {
+  /** Floor point (y = 0) under a screen position, or null. */
+  floorAt: (clientX: number, clientY: number) => [number, number] | null;
+  setView: (v: ViewName) => void;
+}
+
 export interface EditorHooks {
   rotate: boolean;
+  selection?: { kind: "room" | "part"; id: string } | null;
+  dragging?: boolean;
+  onRoomDown?: (id: string, x: number, z: number) => void;
+  onPartDown?: (id: string, x: number, z: number) => void;
+  onHandleDown?: (roomId: string, corner: Corner) => void;
+  onDragMove?: (x: number, z: number) => void;
+  onDragEnd?: () => void;
+  apiRef?: MutableRefObject<SceneApi | null>;
   onFloorDown?: (x: number, z: number) => void;
   onFloorMove?: (x: number, z: number) => void;
   onFloorUp?: (x: number, z: number) => void;
@@ -117,12 +135,14 @@ function Device({
   on,
   opacity,
   onClick,
+  onDown,
 }: {
   d: SceneDevice;
   tint: string;
   on: boolean;
   opacity: number;
   onClick?: (id: string) => void;
+  onDown?: (id: string, x: number, z: number) => void;
 }) {
   const mat = (color: string, extra: Record<string, unknown> = {}) => (
     <meshStandardMaterial color={color} transparent opacity={opacity} roughness={0.6} {...extra} />
@@ -224,7 +244,19 @@ function Device({
     <group position={d.position}>
       {body}
       {/* Generous invisible hit target so small parts are easy to click. */}
-      <mesh onClick={click} visible={false}>
+      <mesh
+        onClick={click}
+        onPointerDown={
+          onDown
+            ? (e: ThreeEvent<PointerEvent>) => {
+                if (e.button !== 0) return;
+                e.stopPropagation();
+                onDown(d.id, e.point.x, e.point.z);
+              }
+            : undefined
+        }
+        visible={false}
+      >
         <sphereGeometry args={[0.3, 8, 8]} />
       </mesh>
       {d.tag && <Label text={d.tag} position={[0, 0.35, 0]} height={0.26} color="#0f172a" bg="#f5b942" />}
@@ -232,7 +264,15 @@ function Device({
   );
 }
 
-function Walls({ rooms }: { rooms: SceneRoom[] }) {
+function Walls({
+  rooms,
+  selected,
+  onDown,
+}: {
+  rooms: SceneRoom[];
+  selected?: string;
+  onDown?: (id: string, x: number, z: number) => void;
+}) {
   return (
     <group>
       {rooms.map((r) => {
@@ -244,9 +284,21 @@ function Walls({ rooms }: { rooms: SceneRoom[] }) {
         ];
         return (
           <group key={r.id}>
-            <mesh position={[r.x + r.w / 2, 0.005, r.z + r.d / 2]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+            <mesh
+              position={[r.x + r.w / 2, 0.005, r.z + r.d / 2]}
+              rotation={[-Math.PI / 2, 0, 0]}
+              {...(onDown
+                ? {
+                    onPointerDown: (e: ThreeEvent<PointerEvent>) => {
+                      if (e.button !== 0) return;
+                      e.stopPropagation();
+                      onDown(r.id, e.point.x, e.point.z);
+                    },
+                  }
+                : { raycast: () => null })}
+            >
               <planeGeometry args={[r.w, r.d]} />
-              <meshStandardMaterial color="#3a4553" roughness={0.9} />
+              <meshStandardMaterial color={selected === r.id ? "#4a4a3a" : "#3a4553"} roughness={0.9} />
             </mesh>
             {walls.map((w, i) => (
               <group key={i}>
@@ -268,6 +320,147 @@ function Walls({ rooms }: { rooms: SceneRoom[] }) {
   );
 }
 
+const AMBER = "#f5b942";
+
+function SelectedRoom({ r, onHandleDown }: { r: SceneRoom; onHandleDown?: (id: string, c: Corner) => void }) {
+  const edges: { pos: V3; size: V3 }[] = [
+    { pos: [r.x + r.w / 2, 0.03, r.z], size: [r.w, 0.03, 0.05] },
+    { pos: [r.x + r.w / 2, 0.03, r.z + r.d], size: [r.w, 0.03, 0.05] },
+    { pos: [r.x, 0.03, r.z + r.d / 2], size: [0.05, 0.03, r.d] },
+    { pos: [r.x + r.w, 0.03, r.z + r.d / 2], size: [0.05, 0.03, r.d] },
+  ];
+  const corners: [Corner, number, number][] = [
+    ["nw", r.x, r.z],
+    ["ne", r.x + r.w, r.z],
+    ["sw", r.x, r.z + r.d],
+    ["se", r.x + r.w, r.z + r.d],
+  ];
+  return (
+    <group>
+      {edges.map((e, i) => (
+        <mesh key={i} position={e.pos} raycast={() => null}>
+          <boxGeometry args={e.size} />
+          <meshBasicMaterial color={AMBER} />
+        </mesh>
+      ))}
+      {corners.map(([c, x, z]) => (
+        <mesh
+          key={c}
+          position={[x, 0.12, z]}
+          onPointerDown={
+            onHandleDown
+              ? (e: ThreeEvent<PointerEvent>) => {
+                  if (e.button !== 0) return;
+                  e.stopPropagation();
+                  onHandleDown(r.id, c);
+                }
+              : undefined
+          }
+          onPointerOver={() => (document.body.style.cursor = "nwse-resize")}
+          onPointerOut={() => (document.body.style.cursor = "")}
+        >
+          <boxGeometry args={[0.28, 0.24, 0.28]} />
+          <meshStandardMaterial color="#ffffff" emissive={AMBER} emissiveIntensity={0.6} />
+        </mesh>
+      ))}
+      <Label text={`${r.w.toFixed(2)} m`} position={[r.x + r.w / 2, 0.35, r.z - 0.35]} height={0.3} color="#0f172a" bg={AMBER} />
+      <Label text={`${r.d.toFixed(2)} m`} position={[r.x + r.w + 0.55, 0.35, r.z + r.d / 2]} height={0.3} color="#0f172a" bg={AMBER} />
+    </group>
+  );
+}
+
+function SelectedPart({ position }: { position: V3 }) {
+  return (
+    <lineSegments position={position} raycast={() => null}>
+      <edgesGeometry args={[new BoxGeometryImpl(0.55, 0.55, 0.55)]} />
+      <lineBasicMaterial color={AMBER} />
+    </lineSegments>
+  );
+}
+
+/* Imperative three.js plumbing: camera, controls and the API ref are mutated on purpose. */
+/* eslint-disable react-hooks/immutability */
+/** Drag tracking, floor picking and camera presets (lives inside the Canvas). */
+function Interaction({
+  editor,
+  controls,
+  rooms,
+}: {
+  editor?: EditorHooks;
+  controls: MutableRefObject<OrbitImpl | null>;
+  rooms: SceneRoom[];
+}) {
+  const { camera, gl } = useThree();
+  const roomsRef = useRef(rooms);
+  useEffect(() => {
+    roomsRef.current = rooms;
+  }, [rooms]);
+
+  const floorAt = useMemo(() => {
+    const ray = new Raycaster();
+    const plane = new Plane(new Vector3(0, 1, 0), 0);
+    const hit = new Vector3();
+    return (cx: number, cy: number): [number, number] | null => {
+      const rect = gl.domElement.getBoundingClientRect();
+      const ndc = new Vector2(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      return ray.ray.intersectPlane(plane, hit) ? [hit.x, hit.z] : null;
+    };
+  }, [camera, gl]);
+
+  useEffect(() => {
+    if (!editor?.apiRef) return;
+    editor.apiRef.current = {
+      floorAt,
+      setView: (v) => {
+        const rs = roomsRef.current;
+        const minX = rs.length ? Math.min(...rs.map((r) => r.x)) : 0;
+        const maxX = rs.length ? Math.max(...rs.map((r) => r.x + r.w)) : 10;
+        const minZ = rs.length ? Math.min(...rs.map((r) => r.z)) : 0;
+        const maxZ = rs.length ? Math.max(...rs.map((r) => r.z + r.d)) : 8;
+        const span = Math.max(maxX - minX, maxZ - minZ, 6);
+        // Shift left a little so the house sits clear of the shape library overlay.
+        const cx = (minX + maxX) / 2 - span * 0.08;
+        const cz = (minZ + maxZ) / 2;
+        const pos: Record<ViewName, V3> = {
+          home: [cx + span * 1.05, span * 1.15, cz + span * 1.45],
+          top: [cx, span * 1.6, cz + 0.01],
+          front: [cx, 2.5, cz + span * 1.5],
+          fit: [cx + span * 0.7, span * 1.3, cz + span * 1.1],
+        };
+        camera.position.set(...pos[v]);
+        controls.current?.target.set(cx, 0.8, cz);
+        controls.current?.update();
+      },
+    };
+  }, [editor?.apiRef, floorAt, camera, controls]);
+
+  const dragging = editor?.dragging;
+  const onMove = editor?.onDragMove;
+  const onEnd = editor?.onDragEnd;
+  useEffect(() => {
+    if (!dragging) {
+      if (controls.current) controls.current.enabled = true;
+      return;
+    }
+    if (controls.current) controls.current.enabled = false;
+    const move = (e: PointerEvent) => {
+      const p = floorAt(e.clientX, e.clientY);
+      if (p) onMove?.(p[0], p[1]);
+    };
+    const up = () => onEnd?.();
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+  }, [dragging, onMove, onEnd, floorAt, controls]);
+
+  return null;
+}
+/* eslint-enable react-hooks/immutability */
+
 export default function HouseScene({
   rooms,
   panel,
@@ -280,6 +473,28 @@ export default function HouseScene({
   editor,
   camera = [14, 11, 15],
 }: Props) {
+  const controls = useRef<OrbitImpl | null>(null);
+  const grab =
+    <A extends unknown[]>(fn?: (...a: A) => void) =>
+    fn
+      ? (...a: A) => {
+          if (controls.current) controls.current.enabled = false;
+          window.addEventListener(
+            "pointerup",
+            () => {
+              if (controls.current) controls.current.enabled = true;
+            },
+            { once: true },
+          );
+          fn(...a);
+        }
+      : undefined;
+  const sel = editor?.selection;
+  const selRoom = sel?.kind === "room" ? rooms.find((r) => r.id === sel.id) : undefined;
+  const selPart =
+    sel?.kind === "part"
+      ? [...loose, ...circuits.flatMap((c) => c.devices), ...(panel ? [panel] : [])].find((d) => d.id === sel.id)
+      : undefined;
   const floor = (fn?: (x: number, z: number) => void) =>
     fn
       ? (e: ThreeEvent<PointerEvent>) => {
@@ -307,7 +522,10 @@ export default function HouseScene({
         </mesh>
       )}
 
-      <Walls rooms={rooms} />
+      <Walls rooms={rooms} selected={selRoom?.id} onDown={grab(editor?.onRoomDown)} />
+      {selRoom && <SelectedRoom r={selRoom} onHandleDown={grab(editor?.onHandleDown)} />}
+      {selPart && <SelectedPart position={selPart.position} />}
+      <Interaction editor={editor} controls={controls} rooms={rooms} />
 
       {editor?.preview && (
         <mesh
@@ -333,6 +551,15 @@ export default function HouseScene({
           </mesh>
           <mesh
             visible={false}
+            onPointerDown={
+              editor?.onPartDown
+                ? (e: ThreeEvent<PointerEvent>) => {
+                    if (e.button !== 0) return;
+                    e.stopPropagation();
+                    grab(editor.onPartDown)!(panel.id, e.point.x, e.point.z);
+                  }
+                : undefined
+            }
             onClick={
               editor?.onPartClick
                 ? (e: ThreeEvent<MouseEvent>) => {
@@ -349,7 +576,15 @@ export default function HouseScene({
       )}
 
       {loose.map((d) => (
-        <Device key={d.id} d={d} tint="#94a3b8" on={false} opacity={0.95} onClick={editor?.onPartClick} />
+        <Device
+          key={d.id}
+          d={d}
+          tint="#94a3b8"
+          on={false}
+          opacity={0.95}
+          onClick={editor?.onPartClick}
+          onDown={grab(editor?.onPartDown)}
+        />
       ))}
 
       {panel &&
@@ -373,13 +608,23 @@ export default function HouseScene({
                 </mesh>
               ))}
               {c.devices.map((d) => (
-                <Device key={d.id} d={d} tint={tint} on={!off} opacity={dim ? 0.15 : 1} onClick={editor?.onPartClick} />
+                <Device
+                  key={d.id}
+                  d={d}
+                  tint={tint}
+                  on={!off}
+                  opacity={dim ? 0.15 : 1}
+                  onClick={editor?.onPartClick}
+                  onDown={grab(editor?.onPartDown)}
+                />
               ))}
             </group>
           );
         })}
 
       <OrbitControls
+        ref={controls}
+        makeDefault
         target={[5, 1, 4]}
         enableRotate={editor ? editor.rotate : true}
         maxPolarAngle={Math.PI / 2.1}

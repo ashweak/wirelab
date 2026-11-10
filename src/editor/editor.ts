@@ -63,12 +63,12 @@ export const roomAt = (rooms: Room[], x: number, z: number) =>
 const INSET = 0.08;
 
 /** Snap a clicked floor point to where the part is actually mounted. */
-export function snapPart(type: EditorPartType, room: Room, x: number, z: number): V3 {
+export function snapPart(type: EditorPartType, room: Room, x: number, z: number, height?: number): V3 {
   const cx = Math.min(Math.max(x, room.x + 0.2), room.x + room.w - 0.2);
   const cz = Math.min(Math.max(z, room.z + 0.2), room.z + room.d - 0.2);
   if (type === "light") return [r3(cx), r3(CEILING - 0.05), r3(cz)];
 
-  const h = type === "outlet" && room.kind === "kitchen" ? 1.1 : PART_INFO[type].height!;
+  const h = height ?? (type === "outlet" && room.kind === "kitchen" ? 1.1 : PART_INFO[type].height!);
   const walls = [
     { dist: x - room.x, pos: [room.x + INSET, h, cz] as V3 },
     { dist: room.x + room.w - x, pos: [room.x + room.w - INSET, h, cz] as V3 },
