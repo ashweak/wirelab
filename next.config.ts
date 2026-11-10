@@ -1,9 +1,12 @@
 import type { NextConfig } from "next";
 
+// Static export for GitHub Pages. BASE_PATH is "/wirelab" in CI, empty locally.
+const basePath = process.env.BASE_PATH ?? "";
+
 const nextConfig: NextConfig = {
-  /* config options here */
-  cacheComponents: true,
-  partialPrefetching: true,
+  output: "export",
+  basePath,
+  images: { unoptimized: true },
   turbopack: {
     rules: {
       "*.css": {
