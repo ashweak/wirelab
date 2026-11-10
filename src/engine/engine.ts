@@ -14,6 +14,7 @@ export function partVA(part: Part, rules: Rules = RULES): number {
   if (part.va !== undefined) return part.va;
   if (part.type === "lighting_outlet") return rules.defaultVA.lighting_outlet;
   if (part.type === "convenience_outlet") return rules.defaultVA.convenience_outlet;
+  if (part.type === "switch") return 0;
   throw new Error(`Part ${part.id} (${part.type}) needs a nameplate VA`);
 }
 
@@ -43,6 +44,16 @@ export function voltageDrop(currentA: number, runM: number, mm2: number, rules: 
   return { dropV, dropPct: (dropV / rules.voltage) * 100 };
 }
 
+/** Voltage drop for a circuit: per segment when the chain is known, else full load at the far end. */
+export function circuitDrop(c: Circuit, loadVA: number, mm2: number, rules: Rules = RULES) {
+  if (!c.segments?.length) return voltageDrop(loadVA / rules.voltage, c.runM, mm2, rules);
+  const dropV = c.segments.reduce(
+    (s, seg) => s + voltageDrop(seg.downstreamVA / rules.voltage, seg.lengthM, mm2, rules).dropV,
+    0,
+  );
+  return { dropV, dropPct: (dropV / rules.voltage) * 100 };
+}
+
 export function computeCircuit(c: Circuit, rules: Rules = RULES): CircuitResult {
   const min = rules.minimums[c.kind];
   const loadVA = c.parts.reduce((s, p) => s + partVA(p, rules), 0);
@@ -51,7 +62,8 @@ export function computeCircuit(c: Circuit, rules: Rules = RULES): CircuitResult 
   const breakerA = c.breakerA ?? requiredBreakerA;
   const requiredWireMm2 = wireFor(breakerA, min.wire, rules);
   const wireMm2 = c.wireMm2 ?? requiredWireMm2;
-  const { dropV, dropPct } = voltageDrop(currentA, c.runM, wireMm2, rules);
+  const { dropV, dropPct } = circuitDrop(c, loadVA, wireMm2, rules);
+  const runM = c.segments?.length ? round(c.segments.reduce((s, x) => s + x.lengthM, 0)) : c.runM;
   return {
     id: c.id,
     name: c.name,
@@ -62,7 +74,7 @@ export function computeCircuit(c: Circuit, rules: Rules = RULES): CircuitResult 
     breakerA,
     requiredWireMm2,
     wireMm2,
-    runM: c.runM,
+    runM,
     dropV: round(dropV, 2),
     dropPct: round(dropPct),
   };
@@ -98,7 +110,7 @@ function checkCircuit(c: Circuit, r: CircuitResult, rules: Rules): CheckResult[]
     const better = rules.wires.find(
       (w) =>
         w.mm2 > r.wireMm2 &&
-        voltageDrop(r.loadVA / rules.voltage, r.runM, w.mm2, rules).dropPct <=
+        circuitDrop(c, r.loadVA, w.mm2, rules).dropPct <=
           rules.maxBranchDropPct,
     );
     out.push({

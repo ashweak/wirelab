@@ -4,7 +4,8 @@ export type PartType =
   | "lighting_outlet"
   | "convenience_outlet"
   | "aircon_outlet"
-  | "appliance_outlet";
+  | "appliance_outlet"
+  | "switch";
 
 export interface Part {
   id: string;
@@ -25,6 +26,11 @@ export interface Circuit {
   parts: Part[];
   /** One-way length from panel to farthest part, metres. */
   runM: number;
+  /**
+   * Optional daisy-chain segments, panel first. When present, voltage drop is
+   * summed per segment using only the load downstream of it, and runM = total length.
+   */
+  segments?: { lengthM: number; downstreamVA: number }[];
   /** Optional overrides; the engine sizes them when absent. */
   breakerA?: number;
   wireMm2?: number;

@@ -1,32 +1,17 @@
 import { CEILING, PANEL_POSITION, ROOMS, goldenHouse } from "@/data/goldenHouse";
 import type { Circuit, Part, PartType, Project } from "@/engine/types";
+import {
+  PART_INFO,
+  type EditorDoc,
+  type EditorPart,
+  type EditorPartType,
+  type Room,
+  type RoomKind,
+  type V3,
+} from "./parts";
+import { chainOrder, chainSegments, segLength } from "./wiring";
 
-export type RoomKind = "living" | "kitchen" | "bath" | "bedroom" | "other";
-export type EditorPartType = "light" | "outlet" | "aircon" | "water_heater" | "panel";
-export type V3 = [number, number, number];
-
-export interface Room {
-  id: string;
-  name: string;
-  kind: RoomKind;
-  x: number;
-  z: number;
-  w: number;
-  d: number;
-}
-
-export interface EditorPart {
-  id: string;
-  type: EditorPartType;
-  roomId: string;
-  position: V3;
-}
-
-export interface EditorDoc {
-  rooms: Room[];
-  parts: EditorPart[];
-  feederRunM: number;
-}
+export * from "./parts";
 
 type Result<T> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -41,17 +26,6 @@ export const ROOM_KINDS: { kind: RoomKind; label: string }[] = [
   { kind: "bath", label: "Bath" },
   { kind: "other", label: "Other" },
 ];
-
-export const PART_INFO: Record<
-  EditorPartType,
-  { label: string; va: number; motor?: boolean; engineType?: PartType }
-> = {
-  light: { label: "Light", va: 100, engineType: "lighting_outlet" },
-  outlet: { label: "Outlet", va: 180, engineType: "convenience_outlet" },
-  aircon: { label: "Aircon 1.5 HP", va: 1800, motor: true, engineType: "aircon_outlet" },
-  water_heater: { label: "Water heater", va: 3500, engineType: "appliance_outlet" },
-  panel: { label: "Panelboard", va: 0 },
-};
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -86,12 +60,6 @@ export function makeRoom(
 export const roomAt = (rooms: Room[], x: number, z: number) =>
   rooms.find((r) => x >= r.x && x <= r.x + r.w && z >= r.z && z <= r.z + r.d);
 
-const WALL_HEIGHT: Record<Exclude<EditorPartType, "light">, number> = {
-  outlet: 0.3,
-  aircon: 2.1,
-  water_heater: 1.8,
-  panel: 1.5,
-};
 const INSET = 0.08;
 
 /** Snap a clicked floor point to where the part is actually mounted. */
@@ -100,7 +68,7 @@ export function snapPart(type: EditorPartType, room: Room, x: number, z: number)
   const cz = Math.min(Math.max(z, room.z + 0.2), room.z + room.d - 0.2);
   if (type === "light") return [r3(cx), r3(CEILING - 0.05), r3(cz)];
 
-  const h = type === "outlet" && room.kind === "kitchen" ? 1.1 : WALL_HEIGHT[type];
+  const h = type === "outlet" && room.kind === "kitchen" ? 1.1 : PART_INFO[type].height!;
   const walls = [
     { dist: x - room.x, pos: [room.x + INSET, h, cz] as V3 },
     { dist: room.x + room.w - x, pos: [room.x + room.w - INSET, h, cz] as V3 },
@@ -109,6 +77,17 @@ export function snapPart(type: EditorPartType, room: Room, x: number, z: number)
   ];
   const best = walls.reduce((a, b) => (b.dist < a.dist ? b : a));
   return best.pos.map(r3) as V3;
+}
+
+/** Which way a wall-mounted part faces (rotation about y), from its room's walls. */
+export function facing(pos: V3, room: { x: number; z: number; w: number; d: number }): number {
+  const d = [
+    { a: Math.PI / 2, v: Math.abs(pos[0] - room.x) },
+    { a: -Math.PI / 2, v: Math.abs(room.x + room.w - pos[0]) },
+    { a: 0, v: Math.abs(pos[2] - room.z) },
+    { a: Math.PI, v: Math.abs(room.z + room.d - pos[2]) },
+  ];
+  return d.reduce((a, b) => (b.v < a.v ? b : a)).a;
 }
 
 export function addPart(doc: EditorDoc, type: EditorPartType, x: number, z: number): Result<{ doc: EditorDoc }> {
@@ -129,7 +108,9 @@ function chunk<T>(xs: T[], n: number): T[][] {
   return out;
 }
 
-/** Group placed parts into circuits and hand the result to the PEC engine. */
+const partVA = (p: EditorPart) => PART_INFO[p.type].va;
+
+/** Group placed parts into daisy-chained circuits and hand the result to the PEC engine. */
 export function toProject(doc: EditorDoc): Result<{ project: Project }> {
   const panel = doc.parts.find((p) => p.type === "panel");
   if (!panel) return { ok: false, error: "Place a panelboard first" };
@@ -146,16 +127,19 @@ export function toProject(doc: EditorDoc): Result<{ project: Project }> {
       ...(info.motor ? { motor: true } : {}),
     };
   };
-  const run = (parts: EditorPart[]) =>
-    Math.ceil(Math.max(...parts.map((p) => routeLength(panel.position, p.position))) * 2) / 2;
   const rooms = (parts: EditorPart[]) => [...new Set(parts.map((p) => roomName(p.roomId)))].join(", ");
 
+  const lightGroups = chunk(doc.parts.filter((p) => p.type === "light"), MAX_LIGHTS_PER_CIRCUIT);
+  // Switches ride on the lighting circuit that feeds lights in their room (else the first one).
+  const switches = doc.parts.filter((p) => p.type === "switch");
+  const lighting = lightGroups.map((g) => ({ kind: "lighting" as const, label: "Lighting", parts: [...g] }));
+  for (const s of switches) {
+    const home = lighting.find((g) => g.parts.some((p) => p.type === "light" && p.roomId === s.roomId)) ?? lighting[0];
+    home?.parts.push(s);
+  }
+
   const groups: { kind: Circuit["kind"]; label: string; parts: EditorPart[] }[] = [
-    ...chunk(doc.parts.filter((p) => p.type === "light"), MAX_LIGHTS_PER_CIRCUIT).map((g) => ({
-      kind: "lighting" as const,
-      label: "Lighting",
-      parts: g,
-    })),
+    ...lighting,
     ...chunk(doc.parts.filter((p) => p.type === "outlet"), MAX_OUTLETS_PER_CIRCUIT).map((g) => ({
       kind: "outlet" as const,
       label: `Outlets, ${rooms(g)}`,
@@ -170,16 +154,39 @@ export function toProject(doc: EditorDoc): Result<{ project: Project }> {
       })),
   ];
 
-  const circuits: Circuit[] = groups.map((g, i) => ({
-    id: `C${i + 1}`,
-    name: `C${i + 1} ${g.label}`,
-    kind: g.kind,
-    runM: run(g.parts),
-    parts: g.parts.map(toEngine),
-  }));
+  const circuits: Circuit[] = groups.map((g, i) => {
+    const ordered = chainOrder(panel.position, g.parts);
+    const segments = chainSegments(
+      panel.position,
+      ordered.map((p) => ({ position: p.position, va: partVA(p) })),
+    );
+    return {
+      id: `C${i + 1}`,
+      name: `C${i + 1} ${g.label}`,
+      kind: g.kind,
+      runM: Math.round(segments.reduce((s, x) => s + x.lengthM, 0) * 10) / 10,
+      segments,
+      parts: ordered.map(toEngine),
+    };
+  });
 
   return { ok: true, project: { name: "My house", feederRunM: doc.feederRunM, circuits } };
 }
+
+/** Wire tool: append a part to the hand-drawn order of its circuit. */
+export function wireNext(doc: EditorDoc, partId: string): EditorDoc {
+  const next = Math.max(0, ...doc.parts.map((p) => p.seq ?? 0)) + 1;
+  return { ...doc, parts: doc.parts.map((p) => (p.id === partId ? { ...p, seq: next } : p)) };
+}
+
+export const resetWiring = (doc: EditorDoc): EditorDoc => ({
+  ...doc,
+  parts: doc.parts.map((p) => {
+    const q = { ...p };
+    delete q.seq;
+    return q;
+  }),
+});
 
 const GOLDEN_KIND: Record<string, RoomKind> = {
   living: "living",
@@ -195,14 +202,16 @@ const FROM_ENGINE: Record<PartType, EditorPartType> = {
   convenience_outlet: "outlet",
   aircon_outlet: "aircon",
   appliance_outlet: "water_heater",
+  switch: "switch",
 };
 
-/** The golden test house as an editable document. */
+/** The golden test house as an editable document, with a switch in every room. */
 export function goldenEditorDoc(): EditorDoc {
   const g = goldenHouse();
+  const rooms: Room[] = ROOMS.map((r) => ({ ...r, kind: GOLDEN_KIND[r.id] }));
   return {
     feederRunM: g.feederRunM,
-    rooms: ROOMS.map((r) => ({ ...r, kind: GOLDEN_KIND[r.id] })),
+    rooms,
     parts: [
       { id: "panel", type: "panel", roomId: "living", position: PANEL_POSITION },
       ...g.circuits.flatMap((c) =>
@@ -213,6 +222,14 @@ export function goldenEditorDoc(): EditorDoc {
           position: p.position!,
         })),
       ),
+      ...rooms.map((r) => ({
+        id: `SW-${r.id}`,
+        type: "switch" as const,
+        roomId: r.id,
+        position: snapPart("switch", r, r.x + r.w - 0.1, r.z + 0.6),
+      })),
     ],
   };
 }
+
+export { segLength };

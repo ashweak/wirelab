@@ -58,12 +58,20 @@ One-storey residential, single-phase 230 V, one panelboard, up to ~15 branch cir
 - Run length = panel → up to ceiling → across → down to the farthest part, rounded up to 0.5 m.
 - Acceptance: rebuilding the golden house in the editor gives the same loads, breakers, wires and main as the spec, with no warnings.
 
+## Wiring rules (step 4)
+
+- Each circuit leaves the panel once and daisy-chains device to device (nearest next device), unless the user sets the order with the Wire tool.
+- Devices on the same wall connect through the wall; otherwise the conduit goes up to the ceiling, across (x, then z) and down. A junction box sits at each ceiling drop.
+- Voltage drop = Σ 2 · I_downstream · L_segment · R per segment (only the load still flowing past that segment).
+- Switches mount at 1.4 m, ride on the lighting circuit of their room, and a room with lights but no switch raises a `NO-SWITCH` design warning.
+- Materials: line + neutral at circuit wire size, ground 2.0 mm² up to 20 A (3.5 mm² up to 60 A); wire = run + 0.3 m per device; conduit in 3 m lengths; utility boxes per wall device; octagonal boxes per light and per ceiling drop.
+
 ## Build order (worked backward)
 
 1. **PEC engine + tests** — done when `npm test` is green. ✅
 2. **Live demo** — golden house in 3D, load schedule, must-fail toggles, breaker-trip demo. ✅
 3. **Editor** — draw rooms on a grid, place parts with snapping. ✅ (tests: `src/editor/editor.test.ts`)
-4. **Wiring** — draw wire paths in 3D; run length measured from the path.
+4. **Wiring** — daisy-chained circuits, hand-drawn wiring order, per-segment voltage drop, switches, materials. ✅ (tests: `src/editor/wiring.test.ts`)
 5. **Outputs** — PDF load schedule, single-line diagram, BOM with PHP prices.
 
 Each step is one instruction: "make the tests for step N pass, following SPEC.md".

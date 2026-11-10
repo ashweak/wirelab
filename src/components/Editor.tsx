@@ -9,6 +9,8 @@ import {
   addPart,
   goldenEditorDoc,
   makeRoom,
+  resetWiring,
+  wireNext,
   roomAt,
   snap,
   snapPart,
@@ -17,21 +19,25 @@ import {
   type EditorPartType,
   type RoomKind,
 } from "@/editor/editor";
-import { ChecksView, H2, ScheduleTable } from "./ScheduleView";
-import type { V3 } from "./HouseScene";
+import { designChecks, materials } from "@/editor/wiring";
+import { ChecksView, H2, MaterialsTable, ScheduleTable } from "./ScheduleView";
+import type { ViewMode } from "./HouseScene";
+import { deviceFor, sceneCircuits } from "./sceneData";
+import { ViewToggle } from "./ViewToggle";
 
 const HouseScene = dynamic(() => import("./HouseScene"), { ssr: false });
 
-type Tool = "orbit" | "room" | "erase" | EditorPartType;
+type Tool = "orbit" | "room" | "wire" | "erase" | EditorPartType;
 
 const STORAGE_KEY = "wirelab.editor.v1";
 const EMPTY: EditorDoc = { rooms: [], parts: [], feederRunM: 10 };
-const PART_TOOLS: EditorPartType[] = ["panel", "light", "outlet", "aircon", "water_heater"];
+const PART_TOOLS: EditorPartType[] = ["panel", "light", "switch", "outlet", "aircon", "water_heater"];
 
 const HINTS: Record<string, string> = {
   orbit: "Drag to orbit, scroll to zoom, right-drag to pan.",
   room: "Drag on the grid to draw a room (snaps to 0.5 m).",
   erase: "Click a part to remove it, or click an empty spot in a room to remove the room.",
+  wire: "Click devices in the order the wire should run from the panel (numbers show the order). Devices you don't click are chained automatically to the nearest one.",
   part: "Click inside a room. Wall parts snap to the nearest wall at code mounting height.",
 };
 
@@ -53,6 +59,7 @@ export default function Editor() {
   const [start, setStart] = useState<[number, number] | null>(null);
   const [hover, setHover] = useState<[number, number] | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
+  const [view, setView] = useState<ViewMode>("real");
   const fileRef = useRef<HTMLInputElement>(null);
   const loaded = useRef(false);
 
@@ -87,7 +94,19 @@ export default function Editor() {
   const built = useMemo(() => toProject(doc), [doc]);
   const schedule = useMemo(() => (built.ok ? computeSchedule(built.project) : null), [built]);
   const faulty = useMemo(() => new Set(schedule?.checks.map((c) => c.targetId) ?? []), [schedule]);
-  const panel = doc.parts.find((p) => p.type === "panel")?.position ?? null;
+  const panelPart = doc.parts.find((p) => p.type === "panel");
+  const panel = panelPart ? deviceFor(panelPart, doc.rooms) : null;
+  const tags = useMemo(
+    () => new Map(doc.parts.filter((p) => p.seq !== undefined).map((p) => [p.id, String(p.seq)])),
+    [doc.parts],
+  );
+  const circuits = useMemo(
+    () => (built.ok && panel ? sceneCircuits(panel.position, built.project.circuits, doc.rooms, tags) : []),
+    [built, panel?.position, doc.rooms, tags], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const extraChecks = useMemo(() => designChecks(doc), [doc]);
+  const bom = useMemo(() => materials(doc), [doc]);
+  const wired = doc.parts.some((p) => p.seq !== undefined);
 
   const isPartTool = (t: Tool): t is EditorPartType => PART_TOOLS.includes(t as EditorPartType);
 
@@ -109,7 +128,10 @@ export default function Editor() {
     if (!isPartTool(tool) || !hover) return null;
     const room = roomAt(doc.rooms, hover[0], hover[1]);
     if (!room) return null;
-    return { type: tool, position: snapPart(tool, room, snap(hover[0], 0.25), snap(hover[1], 0.25)) as V3 };
+    return deviceFor(
+      { id: "ghost", type: tool, roomId: room.id, position: snapPart(tool, room, snap(hover[0], 0.25), snap(hover[1], 0.25)) },
+      doc.rooms,
+    );
   }, [tool, hover, doc.rooms]);
 
   const onFloorDown = (x: number, z: number) => {
@@ -140,10 +162,17 @@ export default function Editor() {
     }
   };
   const onPartClick = (id: string) => {
-    if (tool !== "erase") return;
-    const target = id === "__panel__" ? doc.parts.find((p) => p.type === "panel")?.id : id;
-    setDoc({ ...doc, parts: doc.parts.filter((p) => p.id !== target) });
-    say("Removed part");
+    const part = doc.parts.find((p) => p.id === id);
+    if (!part) return;
+    if (tool === "erase") {
+      setDoc({ ...doc, parts: doc.parts.filter((p) => p.id !== id) });
+      say(`Removed ${PART_INFO[part.type].label}`);
+    } else if (tool === "wire") {
+      if (part.type === "panel") return say("Wiring always starts at the panel — click the devices", true);
+      const next = wireNext(doc, id);
+      setDoc(next);
+      say(`Wired ${PART_INFO[part.type].label} as #${next.parts.find((p) => p.id === id)!.seq}`);
+    }
   };
 
   const exportJson = () => {
@@ -177,8 +206,9 @@ export default function Editor() {
         <HouseScene
           rooms={doc.rooms}
           panel={panel}
-          circuits={built.ok ? built.project.circuits : []}
-          loose={built.ok ? [] : doc.parts.filter((p) => p.type !== "panel")}
+          circuits={circuits}
+          loose={built.ok ? [] : doc.parts.filter((p) => p.type !== "panel").map((p) => deviceFor(p, doc.rooms))}
+          view={view}
           faulty={faulty}
           tripped={new Set()}
           focus={focus}
@@ -194,9 +224,9 @@ export default function Editor() {
           }}
         />
         <div className="absolute left-3 top-3 flex flex-wrap gap-1.5">
-          {(["orbit", "room", "erase"] as Tool[]).map((t) => (
-            <button key={t} onClick={() => setTool(t)} className={`${btn(tool === t)} bg-slate-900/80 capitalize`}>
-              {t === "orbit" ? "↻ Orbit" : t === "room" ? "▭ Room" : "✕ Erase"}
+          {(["orbit", "room", "wire", "erase"] as Tool[]).map((t) => (
+            <button key={t} onClick={() => setTool(t)} className={`${btn(tool === t)} bg-slate-900/80`}>
+              {{ orbit: "↻ Orbit", room: "▭ Room", wire: "〰 Wire", erase: "✕ Erase" }[t as "orbit"]}
             </button>
           ))}
           {PART_TOOLS.map((t) => (
@@ -205,7 +235,8 @@ export default function Editor() {
             </button>
           ))}
         </div>
-        <p className="pointer-events-none absolute bottom-3 left-3 right-3 font-mono text-[10px] text-slate-400">
+        <ViewToggle view={view} setView={setView} />
+        <p className="pointer-events-none absolute bottom-3 left-3 right-56 font-mono text-[10px] text-slate-400">
           {HINTS[isPartTool(tool) ? "part" : tool]}
         </p>
       </section>
@@ -265,6 +296,17 @@ export default function Editor() {
             >
               Clear
             </button>
+            {wired && (
+              <button
+                onClick={() => {
+                  setDoc(resetWiring(doc));
+                  say("Wiring order reset to automatic");
+                }}
+                className={btn(false)}
+              >
+                Reset wiring
+              </button>
+            )}
             <button onClick={exportJson} className={btn(false)}>
               Export JSON
             </button>
@@ -299,12 +341,14 @@ export default function Editor() {
         {built.ok && schedule ? (
           built.project.circuits.length ? (
             <>
-              <ChecksView schedule={schedule} />
+              <ChecksView schedule={schedule} extra={extraChecks} />
               <ScheduleTable schedule={schedule} feederRunM={doc.feederRunM} onFocus={setFocus} />
               <p className="-mt-3 text-[11px] text-slate-500">
-                Circuits are grouped automatically: lights up to 12 per circuit, outlets up to 8, and every
-                aircon or water heater on its own circuit. Run length is measured along the 3D wire path.
+                Each circuit is daisy-chained from the panel: devices on the same wall connect through the wall,
+                others go up to the ceiling and back down. Voltage drop is summed per segment using only the
+                load still downstream. Lights up to 12 per circuit, outlets up to 8, appliances on their own.
               </p>
+              <MaterialsTable lines={bom} />
             </>
           ) : (
             <p className="text-sm text-slate-400">Add lights, outlets or appliances to see the load schedule.</p>

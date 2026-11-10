@@ -9,6 +9,9 @@ import { DEMO_APPLIANCES, SCENARIOS } from "@/data/scenarios";
 import { colorFor } from "./colors";
 import { ChecksView, H2, ScheduleTable } from "./ScheduleView";
 import Editor from "./Editor";
+import { sceneCircuits } from "./sceneData";
+import { ViewToggle } from "./ViewToggle";
+import type { ViewMode } from "./HouseScene";
 
 const HouseScene = dynamic(() => import("./HouseScene"), {
   ssr: false,
@@ -24,11 +27,13 @@ function Demo() {
   const [focus, setFocus] = useState<string | null>(null);
   const [plugged, setPlugged] = useState<Set<string>>(new Set());
   const [tripped, setTripped] = useState(false);
+  const [view, setView] = useState<ViewMode>("real");
 
   const scenario = SCENARIOS.find((s) => s.id === scenarioId)!;
   const project = useMemo(() => scenario.build(), [scenario]);
   const schedule = useMemo(() => computeSchedule(project), [project]);
   const faulty = useMemo(() => new Set(schedule.checks.map((c) => c.targetId)), [schedule]);
+  const circuits = useMemo(() => sceneCircuits(PANEL_POSITION, project.circuits, [...ROOMS]), [project]);
 
   const demoBreaker = schedule.circuits.find((c) => c.id === DEMO_CIRCUIT)!.breakerA;
   const ampsOf = (set: Set<string>) =>
@@ -54,12 +59,14 @@ function Demo() {
       <section className="relative h-[55vh] border-b border-slate-800 lg:h-auto lg:border-b-0 lg:border-r">
         <HouseScene
           rooms={[...ROOMS]}
-          panel={PANEL_POSITION}
-          circuits={project.circuits}
+          panel={{ id: "panel", position: PANEL_POSITION, facing: Math.PI / 2 }}
+          circuits={circuits}
           faulty={faulty}
           tripped={tripped ? new Set([DEMO_CIRCUIT]) : new Set()}
           focus={focus}
+          view={view}
         />
+        <ViewToggle view={view} setView={setView} />
         <div className="pointer-events-none absolute left-3 top-3 flex flex-wrap gap-1.5">
           {schedule.circuits.map((c) => (
             <span
@@ -72,7 +79,7 @@ function Demo() {
           ))}
         </div>
         <p className="pointer-events-none absolute bottom-3 left-3 font-mono text-[10px] text-slate-500">
-          Drag to orbit · scroll to zoom · spheres = lights, cubes = outlets
+          Drag to orbit · scroll to zoom · right-drag to pan · orange = PVC conduit
         </p>
       </section>
 
