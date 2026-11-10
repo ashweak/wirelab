@@ -3,6 +3,9 @@ import type { Circuit, Part, PartType, Project } from "@/engine/types";
 import { FURNITURE, fitInside } from "./interior";
 import {
   PART_INFO,
+  isCeiling,
+  isFloor,
+  isWallPart,
   type EditorDoc,
   type Furniture,
   type FurnitureType,
@@ -76,9 +79,13 @@ export function snapPart(
 ): V3 {
   const cx = Math.min(Math.max(x, room.x + 0.2), room.x + room.w - 0.2);
   const cz = Math.min(Math.max(z, room.z + 0.2), room.z + room.d - 0.2);
-  if (type === "light") return [r3(cx), r3(ceiling - 0.05), r3(cz)];
+  if (isCeiling(type)) return [r3(cx), r3(ceiling - 0.05), r3(cz)];
+  if (isFloor(type)) return [r3(cx), 0.02, r3(cz)];
 
-  const h = height ?? (type === "outlet" && room.kind === "kitchen" ? 1.1 : PART_INFO[type].height!);
+  const h = Math.min(
+    height ?? (type === "outlet" && room.kind === "kitchen" ? 1.1 : PART_INFO[type].height!),
+    ceiling - 0.3,
+  );
   const walls = [
     { dist: x - room.x, pos: [room.x + INSET, h, cz] as V3 },
     { dist: room.x + room.w - x, pos: [room.x + room.w - INSET, h, cz] as V3 },
@@ -125,6 +132,15 @@ function chunk<T>(xs: T[], n: number): T[][] {
 
 const partVA = (p: EditorPart) => PART_INFO[p.type].va;
 
+/** Engine part type for a device, by the circuit it rides on. */
+function engineType(t: EditorPartType): PartType {
+  const info = PART_INFO[t];
+  if (t === "switch" || t === "switch_3way") return "switch";
+  if (info.circuit === "lighting") return "lighting_outlet";
+  if (info.circuit === "outlet") return "convenience_outlet";
+  return info.motor ? "aircon_outlet" : "appliance_outlet";
+}
+
 /** Group placed parts into daisy-chained circuits and hand the result to the PEC engine. */
 export function toProject(doc: EditorDoc): Result<{ project: Project }> {
   const panel = doc.parts.find((p) => p.type === "panel");
@@ -133,35 +149,39 @@ export function toProject(doc: EditorDoc): Result<{ project: Project }> {
   const roomName = (id: string) => doc.rooms.find((r) => r.id === id)?.name ?? "?";
   const toEngine = (p: EditorPart): Part => {
     const info = PART_INFO[p.type];
+    const type = engineType(p.type);
     return {
       id: p.id,
-      type: info.engineType!,
+      type,
       room: p.roomId,
       position: p.position,
-      ...(p.type === "aircon" || p.type === "water_heater" ? { va: info.va } : {}),
+      ...(type === "switch" ? {} : { va: info.va }),
       ...(info.motor ? { motor: true } : {}),
     };
   };
   const rooms = (parts: EditorPart[]) => [...new Set(parts.map((p) => roomName(p.roomId)))].join(", ");
 
-  const lightGroups = chunk(doc.parts.filter((p) => p.type === "light"), MAX_LIGHTS_PER_CIRCUIT);
-  // Switches ride on the lighting circuit that feeds lights in their room (else the first one).
-  const switches = doc.parts.filter((p) => p.type === "switch");
+  const on = (c: string) => doc.parts.filter((p) => PART_INFO[p.type].circuit === c);
+  const isRider = (p: EditorPart) => PART_INFO[p.type].va === 0;
+  const lightGroups = chunk(
+    on("lighting").filter((p) => !isRider(p)),
+    MAX_LIGHTS_PER_CIRCUIT,
+  );
+  // Switches ride on the lighting circuit that feeds loads in their room (else the first one).
   const lighting = lightGroups.map((g) => ({ kind: "lighting" as const, label: "Lighting", parts: [...g] }));
-  for (const s of switches) {
-    const home = lighting.find((g) => g.parts.some((p) => p.type === "light" && p.roomId === s.roomId)) ?? lighting[0];
+  for (const s of on("lighting").filter(isRider)) {
+    const home = lighting.find((g) => g.parts.some((p) => p.roomId === s.roomId)) ?? lighting[0];
     home?.parts.push(s);
   }
 
   const groups: { kind: Circuit["kind"]; label: string; parts: EditorPart[] }[] = [
     ...lighting,
-    ...chunk(doc.parts.filter((p) => p.type === "outlet"), MAX_OUTLETS_PER_CIRCUIT).map((g) => ({
+    ...chunk(on("outlet"), MAX_OUTLETS_PER_CIRCUIT).map((g) => ({
       kind: "outlet" as const,
       label: `Outlets, ${rooms(g)}`,
       parts: g,
     })),
-    ...doc.parts
-      .filter((p) => p.type === "aircon" || p.type === "water_heater")
+    ...on("dedicated")
       .map((p) => ({
         kind: "appliance" as const,
         label: `${PART_INFO[p.type].label} (${roomName(p.roomId)})`,
@@ -170,12 +190,24 @@ export function toProject(doc: EditorDoc): Result<{ project: Project }> {
   ];
 
   const ceiling = doc.ceilingM ?? CEILING;
+  const roomOf = (id: string) => doc.rooms.find((r) => r.id === id);
+  const faceOf = (p: EditorPart) => {
+    const r = roomOf(p.roomId);
+    return isWallPart(p.type) && r ? facing(p.position, r) : undefined;
+  };
+  const panelFace = faceOf(panel);
   const circuits: Circuit[] = groups.map((g, i) => {
-    const ordered = chainOrder(panel.position, g.parts, ceiling);
+    const ordered = chainOrder(
+      panel.position,
+      g.parts.map((p) => ({ ...p, face: faceOf(p) })),
+      ceiling,
+      panelFace,
+    );
     const segments = chainSegments(
       panel.position,
-      ordered.map((p) => ({ position: p.position, va: partVA(p) })),
+      ordered.map((p) => ({ position: p.position, va: partVA(p), face: p.face })),
       ceiling,
+      panelFace,
     );
     return {
       id: `C${i + 1}`,
@@ -183,7 +215,7 @@ export function toProject(doc: EditorDoc): Result<{ project: Project }> {
       kind: g.kind,
       runM: Math.round(segments.reduce((s, x) => s + x.lengthM, 0) * 10) / 10,
       segments,
-      parts: ordered.map(toEngine),
+      parts: ordered.map((p) => toEngine(p)),
     };
   });
 

@@ -7,7 +7,7 @@ import { BoxGeometry as BoxGeometryImpl, CanvasTexture, Plane, Raycaster, SRGBCo
 import type { OrbitControls as OrbitImpl } from "three-stdlib";
 import { CEILING } from "@/data/goldenHouse";
 import { defaultFinish } from "@/editor/interior";
-import type { FloorKind, Furniture, Room } from "@/editor/parts";
+import { PART_INFO, type FloorKind, type Furniture, type Room } from "@/editor/parts";
 import { Environment, Lightformer } from "@react-three/drei";
 import { floorTexture } from "./textures";
 import { FurnitureMesh } from "./Furniture3D";
@@ -170,8 +170,10 @@ function Device({
     : undefined;
 
   let body: React.ReactNode;
-  switch (d.type) {
-    case "light":
+  const info = PART_INFO[d.type];
+  const lamp = (c: string) => mat(on ? "#fff4c7" : c, { emissive: on ? "#ffd977" : "#000", emissiveIntensity: on ? 1.2 : 0 });
+  switch (info?.model) {
+    case "fixture":
       body = (
         <group>
           <mesh position={[0, 0.02, 0]}>
@@ -180,7 +182,7 @@ function Device({
           </mesh>
           <mesh position={[0, -0.01, 0]}>
             <cylinderGeometry args={[0.15, 0.15, 0.02, 24]} />
-            {mat(on ? "#fff4c7" : "#9aa3ad", { emissive: on ? "#ffd977" : "#000", emissiveIntensity: on ? 1.2 : 0 })}
+            {lamp("#9aa3ad")}
           </mesh>
           <mesh position={[0, 0.03, 0]} rotation={[Math.PI / 2, 0, 0]}>
             <torusGeometry args={[0.2, 0.012, 6, 24]} />
@@ -189,36 +191,163 @@ function Device({
         </group>
       );
       break;
-    case "outlet":
-    case "switch":
+    case "downlight":
       body = (
-        <group rotation={[0, d.facing, 0]}>
-          <mesh>
-            <boxGeometry args={[0.16, 0.24, 0.025]} />
-            {mat(PLATE)}
+        <group>
+          <mesh position={[0, 0.03, 0]}>
+            <cylinderGeometry args={[0.09, 0.09, 0.02, 20]} />
+            {mat(tint)}
           </mesh>
-          <mesh position={[0, 0, 0.014]}>
-            <boxGeometry args={[0.17, 0.25, 0.004]} />
-            {mat(tint, { opacity: opacity * 0.9 })}
+          <mesh position={[0, 0.015, 0]}>
+            <cylinderGeometry args={[0.065, 0.065, 0.01, 20]} />
+            {lamp("#c9ced3")}
           </mesh>
-          {d.type === "outlet" ? (
-            <>
-              {[0.05, -0.05].map((y) => (
-                <mesh key={y} position={[0, y, 0.018]}>
-                  <boxGeometry args={[0.07, 0.06, 0.006]} />
-                  {mat("#e9e5dc")}
-                </mesh>
-              ))}
-            </>
-          ) : (
-            <mesh position={[0, 0, 0.02]} rotation={[0.25, 0, 0]}>
-              <boxGeometry args={[0.07, 0.11, 0.015]} />
-              {mat("#e9e5dc")}
-            </mesh>
-          )}
         </group>
       );
       break;
+    case "fan":
+      body = (
+        <group>
+          <mesh position={[0, -0.1, 0]}>
+            <cylinderGeometry args={[0.012, 0.012, 0.2, 8]} />
+            {mat("#5d6a77")}
+          </mesh>
+          <mesh position={[0, -0.22, 0]}>
+            <cylinderGeometry args={[0.09, 0.07, 0.08, 16]} />
+            {mat(tint)}
+          </mesh>
+          {[0, 1, 2].map((i) => (
+            <mesh key={i} position={[Math.cos((i * 2 * Math.PI) / 3) * 0.32, -0.22, Math.sin((i * 2 * Math.PI) / 3) * 0.32]} rotation={[0, -(i * 2 * Math.PI) / 3, 0]}>
+              <boxGeometry args={[0.55, 0.01, 0.12]} />
+              {mat("#8b6a46")}
+            </mesh>
+          ))}
+        </group>
+      );
+      break;
+    case "exhaust":
+      body = (
+        <group>
+          <mesh position={[0, 0.02, 0]}>
+            <boxGeometry args={[0.28, 0.03, 0.28]} />
+            {mat(PLATE)}
+          </mesh>
+          {[-0.08, -0.04, 0, 0.04, 0.08].map((x) => (
+            <mesh key={x} position={[x, 0, 0]}>
+              <boxGeometry args={[0.015, 0.012, 0.22]} />
+              {mat(tint)}
+            </mesh>
+          ))}
+        </group>
+      );
+      break;
+    case "detector":
+      body = (
+        <mesh position={[0, 0.01, 0]}>
+          <cylinderGeometry args={[0.07, 0.08, 0.04, 20]} />
+          {mat(tint === PLATE ? "#f7f7f5" : tint)}
+        </mesh>
+      );
+      break;
+    case "sconce":
+      body = (
+        <group rotation={[0, d.facing, 0]}>
+          <mesh position={[0, 0, 0.02]}>
+            <boxGeometry args={[0.12, 0.2, 0.03]} />
+            {mat(tint)}
+          </mesh>
+          <mesh position={[0, 0.02, 0.1]}>
+            <cylinderGeometry args={[0.07, 0.1, 0.16, 16]} />
+            {lamp("#e8dcc2")}
+          </mesh>
+        </group>
+      );
+      break;
+    case "emergency":
+      body = (
+        <group rotation={[0, d.facing, 0]}>
+          <mesh position={[0, 0, 0.04]}>
+            <boxGeometry args={[0.35, 0.12, 0.08]} />
+            {mat(PLATE)}
+          </mesh>
+          {[-0.12, 0.12].map((x) => (
+            <mesh key={x} position={[x, -0.08, 0.08]}>
+              <boxGeometry args={[0.08, 0.06, 0.08]} />
+              {mat(tint)}
+            </mesh>
+          ))}
+          <mesh position={[0, 0, 0.082]}>
+            <boxGeometry args={[0.04, 0.03, 0.005]} />
+            {mat("#22c55e", { emissive: "#22c55e", emissiveIntensity: on ? 1 : 0 })}
+          </mesh>
+        </group>
+      );
+      break;
+    case "camera":
+      body = (
+        <group rotation={[0, d.facing, 0]}>
+          <mesh position={[0, 0, 0.04]}>
+            <boxGeometry args={[0.08, 0.08, 0.08]} />
+            {mat(tint)}
+          </mesh>
+          <mesh position={[0, -0.03, 0.14]} rotation={[Math.PI / 2 - 0.3, 0, 0]}>
+            <cylinderGeometry args={[0.04, 0.045, 0.18, 16]} />
+            {mat(PLATE)}
+          </mesh>
+          <mesh position={[0, -0.06, 0.235]} rotation={[Math.PI / 2 - 0.3, 0, 0]}>
+            <cylinderGeometry args={[0.025, 0.025, 0.01, 16]} />
+            {mat("#111")}
+          </mesh>
+        </group>
+      );
+      break;
+    case "box":
+      body = (
+        <group rotation={[0, d.facing, 0]}>
+          <mesh position={[0, 0, 0.07]}>
+            <boxGeometry args={[0.32, 0.42, 0.14]} />
+            {mat(d.type === "ev_charger" ? "#e8ecef" : "#5d6a77")}
+          </mesh>
+          <mesh position={[0, 0.08, 0.142]}>
+            <boxGeometry args={[0.14, 0.06, 0.005]} />
+            {mat(tint, { emissive: tint, emissiveIntensity: on ? 0.6 : 0 })}
+          </mesh>
+        </group>
+      );
+      break;
+    case "plate": {
+      const big = d.type === "range_outlet";
+      const floor = d.type === "floor_outlet";
+      const accent =
+        d.type === "gfci_outlet" ? "#c0392b" : d.type === "data_outlet" ? "#2563eb" : d.type === "tv_outlet" ? "#7c3aed" : d.type === "outdoor_outlet" ? "#64748b" : null;
+      const plate = (
+        <>
+          <mesh>
+            <boxGeometry args={[big ? 0.24 : 0.16, big ? 0.24 : 0.24, 0.025]} />
+            {mat(d.type === "outdoor_outlet" ? "#9aa3ad" : PLATE)}
+          </mesh>
+          <mesh position={[0, 0, 0.014]}>
+            <boxGeometry args={[big ? 0.25 : 0.17, 0.25, 0.004]} />
+            {mat(tint, { opacity: opacity * 0.9 })}
+          </mesh>
+          {d.type === "switch" || d.type === "switch_3way" || d.type === "doorbell" ? (
+            <mesh position={[0, 0, 0.02]} rotation={[0.25, 0, 0]}>
+              <boxGeometry args={[0.07, d.type === "doorbell" ? 0.07 : 0.11, 0.015]} />
+              {mat(d.type === "switch_3way" ? "#d4c9a8" : "#e9e5dc")}
+            </mesh>
+          ) : (
+            [0.05, -0.05].map((y) => (
+              <mesh key={y} position={[0, y, 0.018]}>
+                <boxGeometry args={[big ? 0.12 : 0.07, 0.06, 0.006]} />
+                {mat(accent ?? "#e9e5dc")}
+              </mesh>
+            ))
+          )}
+        </>
+      );
+      body = floor ? <group rotation={[-Math.PI / 2, 0, 0]}>{plate}</group> : <group rotation={[0, d.facing, 0]}>{plate}</group>;
+      break;
+    }
     case "aircon":
       body = (
         <group rotation={[0, d.facing, 0]}>
@@ -237,7 +366,7 @@ function Device({
         </group>
       );
       break;
-    case "water_heater":
+    case "heater":
       body = (
         <group rotation={[0, d.facing, 0]}>
           <mesh position={[0, 0, 0.06]}>
@@ -548,7 +677,10 @@ export default function HouseScene({
   // In a cutaway render, anything mounted above the cut (lights, panel, aircon) would float, so hide it.
   const above = (d: { position: V3 }) => render && cutaway && d.position[1] > wallH;
   const lit = useMemo(
-    () => circuits.flatMap((c) => (tripped.has(c.id) ? [] : c.devices.filter((d) => d.type === "light"))).slice(0, 24),
+    () =>
+      circuits
+        .flatMap((c) => (tripped.has(c.id) ? [] : c.devices.filter((d) => d.type === "light" || d.type === "downlight")))
+        .slice(0, 24),
     [circuits, tripped],
   );
   const controls = useRef<OrbitImpl | null>(null);

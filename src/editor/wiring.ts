@@ -1,8 +1,16 @@
 import { CEILING } from "@/data/goldenHouse";
 import { computeSchedule } from "@/engine/engine";
 import type { CheckResult, Project } from "@/engine/types";
-import { toProject } from "./editor";
-import { PART_INFO, type EditorDoc, type V3 } from "./parts";
+import { facing, toProject } from "./editor";
+import {
+  PART_INFO,
+  PART_TYPES,
+  isLightingLoad,
+  isWallPart,
+  type EditorDoc,
+  type EditorPartType,
+  type V3,
+} from "./parts";
 
 /** Conduit runs just under the ceiling slab. */
 export const CONDUIT_DROP = 0.08;
@@ -10,62 +18,97 @@ export const CONDUIT_Y = CEILING - CONDUIT_DROP;
 const EPS = 0.02;
 const TAIL_M = 0.3; // wire left at each device for terminations
 
-const onSameWall = (a: V3, b: V3, ceiling = CEILING) =>
-  a[1] < ceiling - 0.2 &&
-  b[1] < ceiling - 0.2 &&
-  (Math.abs(a[0] - b[0]) < EPS || Math.abs(a[2] - b[2]) < EPS);
+/**
+ * Two wall devices share a wall plane. With facings known, they must face the same way and
+ * sit on the same plane; without them (legacy data) fall back to a shared x or z coordinate.
+ */
+const onSameWall = (a: V3, b: V3, ceiling = CEILING, fa?: number, fb?: number) => {
+  if (a[1] >= ceiling - 0.2 || b[1] >= ceiling - 0.2) return false;
+  if (fa !== undefined && fb !== undefined) {
+    if (Math.abs(Math.cos(fa - fb) - 1) > 1e-6) return false;
+    return Math.abs(Math.sin(fa)) > 0.5 ? Math.abs(a[0] - b[0]) < EPS : Math.abs(a[2] - b[2]) < EPS;
+  }
+  return Math.abs(a[0] - b[0]) < EPS || Math.abs(a[2] - b[2]) < EPS;
+};
 
 /**
  * Route between two mounting points.
  * Same wall: along the wall at the first device's height, then up/down to the second.
  * Otherwise: up to the ceiling, across in x, across in z, down.
  */
-export function segPath(a: V3, b: V3, ceiling = CEILING): V3[] {
-  if (onSameWall(a, b, ceiling)) return [a, [b[0], a[1], b[2]], b];
+export function segPath(a: V3, b: V3, ceiling = CEILING, fa?: number, fb?: number): V3[] {
+  if (onSameWall(a, b, ceiling, fa, fb)) return [a, [b[0], a[1], b[2]], b];
   const y = ceiling - CONDUIT_DROP;
   return [a, [a[0], y, a[2]], [b[0], y, a[2]], [b[0], y, b[2]], b];
 }
 
 /** Length used for wire and voltage drop (measured to the ceiling line). */
-export function segLength(a: V3, b: V3, ceiling = CEILING): number {
+export function segLength(a: V3, b: V3, ceiling = CEILING, fa?: number, fb?: number): number {
   const flat = Math.abs(a[0] - b[0]) + Math.abs(a[2] - b[2]);
-  if (onSameWall(a, b, ceiling)) return flat + Math.abs(a[1] - b[1]);
+  if (onSameWall(a, b, ceiling, fa, fb)) return flat + Math.abs(a[1] - b[1]);
   return ceiling - a[1] + flat + (ceiling - b[1]);
 }
 
 /** Hand-wired parts first (by seq), then nearest-neighbour from wherever the chain ends. */
-export function chainOrder<T extends { position: V3; seq?: number }>(
+export function chainOrder<T extends { position: V3; seq?: number; face?: number }>(
   panel: V3,
   parts: T[],
   ceiling = CEILING,
+  panelFace?: number,
 ): T[] {
   const manual = parts.filter((p) => p.seq !== undefined).sort((a, b) => a.seq! - b.seq!);
   const rest = parts.filter((p) => p.seq === undefined);
   const out = [...manual];
   let at = out.at(-1)?.position ?? panel;
+  let face = out.length ? out.at(-1)!.face : panelFace;
+  const dist = (p: T) => segLength(at, p.position, ceiling, face, p.face);
   while (rest.length) {
     let best = 0;
-    for (let i = 1; i < rest.length; i++)
-      if (segLength(at, rest[i].position, ceiling) < segLength(at, rest[best].position, ceiling)) best = i;
+    for (let i = 1; i < rest.length; i++) if (dist(rest[i]) < dist(rest[best])) best = i;
     const [p] = rest.splice(best, 1);
     out.push(p);
     at = p.position;
+    face = p.face;
   }
   return out;
 }
 
 /** Segments for the engine: length of each hop and the load still downstream of it. */
-export function chainSegments(panel: V3, ordered: { position: V3; va: number }[], ceiling = CEILING) {
+export function chainSegments(
+  panel: V3,
+  ordered: { position: V3; va: number; face?: number }[],
+  ceiling = CEILING,
+  panelFace?: number,
+) {
   return ordered.map((p, i) => ({
-    lengthM: segLength(i === 0 ? panel : ordered[i - 1].position, p.position, ceiling),
+    lengthM: segLength(
+      i === 0 ? panel : ordered[i - 1].position,
+      p.position,
+      ceiling,
+      i === 0 ? panelFace : ordered[i - 1].face,
+      p.face,
+    ),
     downstreamVA: ordered.slice(i).reduce((s, x) => s + x.va, 0),
   }));
 }
 
 /** Polylines for drawing a chained circuit. */
-export function chainPaths(panel: V3, ordered: { position?: V3 }[], ceiling = CEILING): V3[][] {
-  const pts = ordered.filter((p) => p.position).map((p) => p.position!);
-  return pts.map((p, i) => segPath(i === 0 ? panel : pts[i - 1], p, ceiling));
+export function chainPaths(
+  panel: V3,
+  ordered: { position?: V3; face?: number }[],
+  ceiling = CEILING,
+  panelFace?: number,
+): V3[][] {
+  const pts = ordered.filter((p) => p.position) as { position: V3; face?: number }[];
+  return pts.map((p, i) =>
+    segPath(
+      i === 0 ? panel : pts[i - 1].position,
+      p.position,
+      ceiling,
+      i === 0 ? panelFace : pts[i - 1].face,
+      p.face,
+    ),
+  );
 }
 
 /** Ceiling points where a conduit drops down a wall to a device (junction boxes). */
@@ -78,19 +121,26 @@ export function dropPoints(paths: V3[][], ceiling = CEILING): V3[] {
 export function designChecks(doc: EditorDoc): CheckResult[] {
   return doc.rooms.flatMap((r) => {
     const here = doc.parts.filter((p) => p.roomId === r.id);
-    const lit = here.some((p) => p.type === "light");
-    const switched = here.some((p) => p.type === "switch");
-    return lit && !switched
-      ? [
-          {
-            code: "NO-SWITCH",
-            severity: "warning" as const,
-            targetId: r.id,
-            message: `${r.name}: lights have no wall switch`,
-            fix: `Add a switch in ${r.name}, beside the door`,
-          },
-        ]
-      : [];
+    const out: CheckResult[] = [];
+    const lit = here.some((p) => isLightingLoad(p.type));
+    const switched = here.some((p) => p.type === "switch" || p.type === "switch_3way");
+    if (lit && !switched)
+      out.push({
+        code: "NO-SWITCH",
+        severity: "warning",
+        targetId: r.id,
+        message: `${r.name}: lights or fans have no wall switch`,
+        fix: `Add a switch in ${r.name}, beside the door`,
+      });
+    if (r.kind === "bath" && here.some((p) => p.type === "outlet"))
+      out.push({
+        code: "GFCI-BATH",
+        severity: "warning",
+        targetId: r.id,
+        message: `${r.name}: bathroom outlets should be ground-fault protected`,
+        fix: "Replace with a GFCI outlet",
+      });
+    return out;
   });
 }
 
@@ -125,11 +175,22 @@ export function materials(doc: EditorDoc): MaterialLine[] {
     ground.set(g, (ground.get(g) ?? 0) + wire);
     conduitM += run;
     const ceil = doc.ceilingM ?? CEILING;
-    drops += dropPoints(chainPaths(panel.position, c.parts, ceil), ceil).length;
+    const face = (id: string, pos: V3) => {
+      const p = doc.parts.find((q) => q.id === id);
+      const r = doc.rooms.find((q) => q.id === p?.roomId);
+      return p && r && isWallPart(p.type) ? facing(pos, r) : undefined;
+    };
+    const pf = face(panel.id, panel.position);
+    drops += dropPoints(
+      chainPaths(panel.position, c.parts.map((p) => ({ position: p.position, face: face(p.id, p.position!) })), ceil, pf),
+      ceil,
+    ).length;
     breakers.set(r.breakerA, (breakers.get(r.breakerA) ?? 0) + 1);
   });
 
-  const count = (t: EditorDoc["parts"][number]["type"]) => doc.parts.filter((p) => p.type === t).length;
+  const count = (t: EditorPartType) => doc.parts.filter((p) => p.type === t).length;
+  const wallBoxes = doc.parts.filter((p) => p.type !== "panel" && PART_INFO[p.type].mount !== "ceiling").length;
+  const ceilingBoxes = doc.parts.filter((p) => PART_INFO[p.type].mount === "ceiling").length;
   const lines: MaterialLine[] = [
     ...[...lineNeutral].sort((a, b) => a[0] - b[0]).map(([mm2, m]) => ({
       item: `THHN ${mm2.toFixed(1)} mm² wire (line + neutral)`,
@@ -142,17 +203,9 @@ export function materials(doc: EditorDoc): MaterialLine[] {
       unit: "m",
     })),
     { item: 'PVC conduit 15 mm (½"), 3 m length', qty: Math.ceil(conduitM / 3), unit: "pcs" },
-    {
-      item: 'Utility box 2" × 4"',
-      qty: count("outlet") + count("switch") + count("aircon") + count("water_heater"),
-      unit: "pcs",
-    },
-    { item: "Octagonal junction box", qty: count("light") + drops, unit: "pcs" },
-    { item: "Duplex convenience outlet", qty: count("outlet"), unit: "pcs" },
-    { item: "Wall switch, 1-gang", qty: count("switch"), unit: "pcs" },
-    { item: "Lighting outlet (ceiling)", qty: count("light"), unit: "pcs" },
-    { item: "Aircon outlet, 20 A", qty: count("aircon"), unit: "pcs" },
-    { item: "Water heater outlet", qty: count("water_heater"), unit: "pcs" },
+    { item: 'Utility box 2" × 4"', qty: wallBoxes, unit: "pcs" },
+    { item: "Octagonal junction box", qty: ceilingBoxes + drops, unit: "pcs" },
+    ...PART_TYPES.filter((t) => t !== "panel").map((t) => ({ item: PART_INFO[t].bom, qty: count(t), unit: "pcs" })),
     ...[...breakers].sort((a, b) => a[0] - b[0]).map(([a, n]) => ({
       item: `Circuit breaker ${a} A, 2-pole`,
       qty: n,

@@ -38,6 +38,8 @@ import {
   CEILING_RANGE,
   FLOOR_KINDS,
   FURNITURE,
+  FURNITURE_GROUPS,
+  SIZE_LIMITS,
   WALL_PAINTS,
   addFurniture,
   ceilingOf,
@@ -50,7 +52,7 @@ import {
   setFinish,
   setFurnitureColor,
 } from "@/editor/interior";
-import type { FloorKind, FurnitureType } from "@/editor/parts";
+import { PART_TYPES, type FloorKind, type FurnitureType } from "@/editor/parts";
 import { ChecksView, H2, MaterialsTable, ScheduleTable } from "./ScheduleView";
 import type { Corner, SceneApi, ViewMode, ViewName } from "./HouseScene";
 import { deviceFor, sceneCircuits } from "./sceneData";
@@ -69,15 +71,22 @@ type Drag =
 
 const STORAGE_KEY = "wirelab.editor.v1";
 const EMPTY: EditorDoc = { rooms: [], parts: [], feederRunM: 10 };
-const PART_TYPES: EditorPartType[] = ["panel", "light", "switch", "outlet", "aircon", "water_heater"];
-const PART_ICON: Record<EditorPartType, string> = {
+const MODEL_ICON: Record<string, string> = {
   panel: "▣",
-  light: "◉",
-  switch: "⏻",
-  outlet: "⊡",
+  fixture: "◉",
+  downlight: "•",
+  sconce: "◐",
+  fan: "✢",
+  exhaust: "▦",
+  emergency: "⚠",
+  detector: "◎",
+  plate: "⊡",
   aircon: "❄",
-  water_heater: "♨",
+  heater: "♨",
+  box: "▤",
+  camera: "◘",
 };
+const PART_GROUPS = ["Panel", "Lighting", "Switches", "Power", "Appliances", "Low voltage"] as const;
 const SNAPS = [0.1, 0.25, 0.5, 1];
 const DND = "application/x-wirelab";
 
@@ -139,6 +148,37 @@ function Num({
   );
 }
 
+function Group({
+  title,
+  count,
+  open,
+  toggle,
+  children,
+}: {
+  title: string;
+  count: number;
+  open: Set<string>;
+  toggle: (g: string) => void;
+  children: React.ReactNode;
+}) {
+  const isOpen = open.has(title);
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        onClick={() => toggle(title)}
+        className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-slate-400 hover:text-slate-200"
+        aria-expanded={isOpen}
+      >
+        <span>
+          {isOpen ? "▾" : "▸"} {title}
+        </span>
+        <span className="font-mono text-slate-600">{count}</span>
+      </button>
+      {isOpen && children}
+    </div>
+  );
+}
+
 export default function Editor() {
   const [doc, setDocState] = useState<EditorDoc>(EMPTY);
   const [draft, setDraft] = useState<EditorDoc | null>(null);
@@ -159,6 +199,16 @@ export default function Editor() {
   const [cutaway, setCutaway] = useState(true);
   const [showWiring, setShowWiring] = useState(false);
   const [custom, setCustom] = useState({ w: 3.5, d: 3, kind: "bedroom" as RoomKind });
+  const [query, setQuery] = useState("");
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Rooms", "⚡ Lighting", "⚡ Power"]));
+  const toggleGroup = (g: string) =>
+    setOpenGroups((o) => {
+      const n = new Set(o);
+      if (n.has(g)) n.delete(g);
+      else n.add(g);
+      return n;
+    });
+  const match = (text: string) => text.toLowerCase().includes(query.trim().toLowerCase());
   const api = useRef<SceneApi | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const loaded = useRef(false);
@@ -535,6 +585,32 @@ export default function Editor() {
     `flex w-full cursor-grab items-center gap-2 rounded-md border px-2 py-1.5 text-left text-[11px] transition active:cursor-grabbing ${
       active ? "border-amber-400 bg-amber-400/10 text-amber-200" : "border-slate-700 bg-slate-900/90 text-slate-300 hover:border-slate-500"
     }`;
+  const partTile = (t: EditorPartType) => (
+    <button
+      key={`p-${t}`}
+      draggable
+      onDragStart={(e) => e.dataTransfer.setData(DND, JSON.stringify({ kind: "part", id: t }))}
+      onClick={() => setTool(`place:${t}`)}
+      className={tile(tool === `place:${t}`)}
+      title={`${PART_INFO[t].label} · ${PART_INFO[t].va ? `${PART_INFO[t].va} VA` : "no load"} · ${PART_INFO[t].circuit} circuit`}
+    >
+      <span className="w-4 text-center text-sm">{MODEL_ICON[PART_INFO[t].model] ?? "•"}</span>
+      {PART_INFO[t].label}
+    </button>
+  );
+  const furnTile = (t: FurnitureType) => (
+    <button
+      key={`f-${t}`}
+      draggable
+      onDragStart={(e) => e.dataTransfer.setData(DND, JSON.stringify({ kind: "furniture", id: t }))}
+      onClick={() => setTool(`furn:${t}`)}
+      className={tile(tool === `furn:${t}`)}
+      title={`${FURNITURE[t].label} · ${FURNITURE[t].w} × ${FURNITURE[t].d} × ${FURNITURE[t].h} m`}
+    >
+      <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: FURNITURE[t].color }} />
+      {FURNITURE[t].label}
+    </button>
+  );
   const hintKey = tool.startsWith("place:")
     ? "place"
     : tool.startsWith("preset:")
@@ -677,103 +753,118 @@ export default function Editor() {
         )}
 
         {/* Shape library */}
-        <div className="absolute bottom-14 left-3 top-14 flex w-40 flex-col gap-3 overflow-y-auto pr-1">
-          <div className="flex flex-col gap-1">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Rooms</p>
-            {ROOM_PRESETS.map((p) => (
-              <button
-                key={p.id}
-                draggable
-                onDragStart={(e) => e.dataTransfer.setData(DND, JSON.stringify({ kind: "preset", id: p.id }))}
-                onClick={() => setTool(`preset:${p.id}`)}
-                className={tile(tool === `preset:${p.id}`)}
-              >
-                <span
-                  className="inline-block shrink-0 border border-current"
-                  style={{ width: p.w * 5, height: p.d * 5 }}
-                />
-                {p.label}
-              </button>
-            ))}
-          </div>
-          <div className="flex flex-col gap-1 rounded-md border border-slate-700 bg-slate-900/90 p-1.5">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Custom room</p>
-            <div className="flex items-center gap-1 font-mono text-[11px] text-slate-400">
-              <input
-                type="number"
-                min={1}
-                max={20}
-                step={0.5}
-                value={custom.w}
-                onChange={(e) => setCustom({ ...custom, w: Math.max(1, Number(e.target.value) || 1) })}
-                className="w-12 rounded border border-slate-700 bg-slate-950 px-1 py-0.5 text-slate-200"
-                aria-label="Custom room width (m)"
-              />
-              ×
-              <input
-                type="number"
-                min={1}
-                max={20}
-                step={0.5}
-                value={custom.d}
-                onChange={(e) => setCustom({ ...custom, d: Math.max(1, Number(e.target.value) || 1) })}
-                className="w-12 rounded border border-slate-700 bg-slate-950 px-1 py-0.5 text-slate-200"
-                aria-label="Custom room depth (m)"
-              />
-              m
+        <div className="absolute bottom-14 left-3 top-14 flex w-48 flex-col gap-2 overflow-y-auto pr-1">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search library…"
+            className="sticky top-0 z-10 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-200 placeholder:text-slate-500"
+          />
+          {query.trim() ? (
+            <div className="flex flex-col gap-1">
+              {[
+                ...ROOM_PRESETS.filter((p) => match(p.label)).map((p) => (
+                  <button
+                    key={`r-${p.id}`}
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData(DND, JSON.stringify({ kind: "preset", id: p.id }))}
+                    onClick={() => setTool(`preset:${p.id}`)}
+                    className={tile(tool === `preset:${p.id}`)}
+                  >
+                    ▭ {p.label}
+                  </button>
+                )),
+                ...PART_TYPES.filter((t) => match(PART_INFO[t].label) || match(PART_INFO[t].group)).map((t) => partTile(t)),
+                ...Object.keys(FURNITURE)
+                  .filter((t) => match(FURNITURE[t].label) || match(FURNITURE[t].group))
+                  .map((t) => furnTile(t)),
+              ]}
+              <p className="text-[10px] text-slate-500">Showing matches for “{query}”.</p>
             </div>
-            <select
-              value={custom.kind}
-              onChange={(e) => setCustom({ ...custom, kind: e.target.value as RoomKind })}
-              className="rounded border border-slate-700 bg-slate-950 px-1 py-0.5 text-[11px] text-slate-200"
-              aria-label="Custom room type"
-            >
-              {ROOM_KINDS.map((k) => (
-                <option key={k.kind} value={k.kind}>
-                  {k.label}
-                </option>
-              ))}
-            </select>
-            <button
-              draggable
-              onDragStart={(e) => e.dataTransfer.setData(DND, JSON.stringify({ kind: "preset", id: "custom" }))}
-              onClick={() => setTool("preset:custom")}
-              className={tile(tool === "preset:custom")}
-            >
-              ＋ Drop {custom.w} × {custom.d} m
-            </button>
-          </div>
-          <div className="flex flex-col gap-1">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Furniture</p>
-            {(Object.keys(FURNITURE) as FurnitureType[]).map((t) => (
-              <button
-                key={t}
-                draggable
-                onDragStart={(e) => e.dataTransfer.setData(DND, JSON.stringify({ kind: "furniture", id: t }))}
-                onClick={() => setTool(`furn:${t}`)}
-                className={tile(tool === `furn:${t}`)}
-              >
-                <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: FURNITURE[t].color }} />
-                {FURNITURE[t].label}
-              </button>
-            ))}
-          </div>
-          <div className="flex flex-col gap-1">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Electrical</p>
-            {PART_TYPES.map((t) => (
-              <button
-                key={t}
-                draggable
-                onDragStart={(e) => e.dataTransfer.setData(DND, JSON.stringify({ kind: "part", id: t }))}
-                onClick={() => setTool(`place:${t}`)}
-                className={tile(tool === `place:${t}`)}
-              >
-                <span className="w-4 text-center text-sm">{PART_ICON[t]}</span>
-                {PART_INFO[t].label}
-              </button>
-            ))}
-          </div>
-          <p className="text-[10px] leading-snug text-slate-500">Drag onto the plane, or click then click to place.</p>
+          ) : (
+            <>
+              <Group title="Rooms" open={openGroups} toggle={toggleGroup} count={ROOM_PRESETS.length + 1}>
+                {ROOM_PRESETS.map((p) => (
+                  <button
+                    key={p.id}
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData(DND, JSON.stringify({ kind: "preset", id: p.id }))}
+                    onClick={() => setTool(`preset:${p.id}`)}
+                    className={tile(tool === `preset:${p.id}`)}
+                  >
+                    <span className="inline-block shrink-0 border border-current" style={{ width: p.w * 5, height: p.d * 5 }} />
+                    {p.label}
+                  </button>
+                ))}
+                <div className="flex flex-col gap-1 rounded-md border border-slate-700 bg-slate-900/90 p-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Custom size</p>
+                  <div className="flex items-center gap-1 font-mono text-[11px] text-slate-400">
+                    <input
+                      type="number"
+                      min={1}
+                      max={30}
+                      step={0.5}
+                      value={custom.w}
+                      onChange={(e) => setCustom({ ...custom, w: Math.min(30, Math.max(1, Number(e.target.value) || 1)) })}
+                      className="w-14 rounded border border-slate-700 bg-slate-950 px-1 py-0.5 text-slate-200"
+                      aria-label="Custom room width (m)"
+                    />
+                    ×
+                    <input
+                      type="number"
+                      min={1}
+                      max={30}
+                      step={0.5}
+                      value={custom.d}
+                      onChange={(e) => setCustom({ ...custom, d: Math.min(30, Math.max(1, Number(e.target.value) || 1)) })}
+                      className="w-14 rounded border border-slate-700 bg-slate-950 px-1 py-0.5 text-slate-200"
+                      aria-label="Custom room depth (m)"
+                    />
+                    m
+                  </div>
+                  <select
+                    value={custom.kind}
+                    onChange={(e) => setCustom({ ...custom, kind: e.target.value as RoomKind })}
+                    className="rounded border border-slate-700 bg-slate-950 px-1 py-0.5 text-[11px] text-slate-200"
+                    aria-label="Custom room type"
+                  >
+                    {ROOM_KINDS.map((k) => (
+                      <option key={k.kind} value={k.kind}>
+                        {k.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData(DND, JSON.stringify({ kind: "preset", id: "custom" }))}
+                    onClick={() => setTool("preset:custom")}
+                    className={tile(tool === "preset:custom")}
+                  >
+                    ＋ Drop {custom.w} × {custom.d} m
+                  </button>
+                </div>
+              </Group>
+              {PART_GROUPS.map((g) => {
+                const items = PART_TYPES.filter((t) => PART_INFO[t].group === g);
+                return (
+                  <Group key={g} title={`⚡ ${g}`} open={openGroups} toggle={toggleGroup} count={items.length}>
+                    {items.map((t) => partTile(t))}
+                  </Group>
+                );
+              })}
+              {FURNITURE_GROUPS.map((g) => {
+                const items = Object.keys(FURNITURE).filter((t) => FURNITURE[t].group === g);
+                return (
+                  <Group key={g} title={g} open={openGroups} toggle={toggleGroup} count={items.length}>
+                    {items.map((t) => furnTile(t))}
+                  </Group>
+                );
+              })}
+            </>
+          )}
+          <p className="text-[10px] leading-snug text-slate-500">
+            Drag onto the plane, or click then click to place. People, vehicles and trees can go outside rooms.
+          </p>
         </div>
 
         <ViewToggle view={view} setView={setView} />
@@ -954,7 +1045,7 @@ export default function Editor() {
             <H2>Selected furniture</H2>
             <p className="text-sm text-slate-200">
               {FURNITURE[selFurn.type].label}
-              <span className="text-slate-500"> · {shown.rooms.find((r) => r.id === selFurn.roomId)?.name}</span>
+              <span className="text-slate-500"> · {shown.rooms.find((r) => r.id === selFurn.roomId)?.name ?? "Outdoors"}</span>
             </p>
             <div className="mt-2 grid grid-cols-3 gap-2">
               {(["w", "d", "h"] as const).map((k) => (
@@ -968,8 +1059,8 @@ export default function Editor() {
               ))}
             </div>
             <p className="mt-1 font-mono text-[10px] text-slate-500">
-              W {FURNITURE[selFurn.type].limits.w.join("–")} · D {FURNITURE[selFurn.type].limits.d.join("–")} · H{" "}
-              {FURNITURE[selFurn.type].limits.h.join("–")} m · facing {selFurn.rot}°
+              Any size: W/D {SIZE_LIMITS.w.join("–")} m · H {SIZE_LIMITS.h.join("–")} m · facing {selFurn.rot}°
+              {selFurn.roomId === "" && " · outdoors"}
             </p>
             <label className="mt-2 flex items-center gap-2 text-[10px] uppercase tracking-wider text-slate-500">
               Colour

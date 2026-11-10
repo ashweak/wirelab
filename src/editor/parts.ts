@@ -1,7 +1,31 @@
-import type { PartType } from "@/engine/types";
 
 export type RoomKind = "living" | "kitchen" | "bath" | "bedroom" | "other";
-export type EditorPartType = "light" | "switch" | "outlet" | "aircon" | "water_heater" | "panel";
+export type EditorPartType =
+  | "panel"
+  | "light"
+  | "downlight"
+  | "wall_lamp"
+  | "ceiling_fan"
+  | "exhaust_fan"
+  | "emergency_light"
+  | "smoke_detector"
+  | "doorbell"
+  | "switch"
+  | "switch_3way"
+  | "outlet"
+  | "gfci_outlet"
+  | "outdoor_outlet"
+  | "floor_outlet"
+  | "aircon"
+  | "water_heater"
+  | "range_outlet"
+  | "ref_outlet"
+  | "washer_outlet"
+  | "water_pump"
+  | "ev_charger"
+  | "data_outlet"
+  | "tv_outlet"
+  | "cctv";
 export type V3 = [number, number, number];
 
 export type FloorKind = "tile" | "wood" | "concrete" | "vinyl";
@@ -19,25 +43,13 @@ export interface Room {
   wall?: string;
 }
 
-export type FurnitureType =
-  | "bed_single"
-  | "bed_double"
-  | "sofa"
-  | "coffee_table"
-  | "dining_table"
-  | "chair"
-  | "desk"
-  | "wardrobe"
-  | "tv_stand"
-  | "counter"
-  | "fridge"
-  | "toilet"
-  | "vanity"
-  | "shower";
+/** Catalogue key, e.g. "bed_double" or "car_sedan" (see FURNITURE in interior.ts). */
+export type FurnitureType = string;
 
 export interface Furniture {
   id: string;
   type: FurnitureType;
+  /** Room it stands in, or "" when outdoors. */
   roomId: string;
   /** Centre of the footprint on the floor. */
   x: number;
@@ -69,25 +81,79 @@ export interface EditorDoc {
   ceilingM?: number;
 }
 
-export const PART_INFO: Record<
-  EditorPartType,
-  { label: string; va: number; motor?: boolean; engineType?: PartType; height?: number }
-> = {
-  panel: { label: "Panelboard", va: 0, height: 1.5 },
-  light: { label: "Light", va: 100, engineType: "lighting_outlet" },
-  switch: { label: "Switch", va: 0, engineType: "switch", height: 1.4 },
-  outlet: { label: "Outlet", va: 180, engineType: "convenience_outlet", height: 0.3 },
-  aircon: { label: "Aircon 1.5 HP", va: 1800, motor: true, engineType: "aircon_outlet", height: 2.1 },
-  water_heater: { label: "Water heater", va: 3500, engineType: "appliance_outlet", height: 1.8 },
+/** Which circuit a device rides on. "none" = low-voltage, not on a breaker. */
+export type CircuitClass = "panel" | "lighting" | "outlet" | "dedicated" | "none";
+export type Mount = "ceiling" | "wall" | "floor";
+export type DeviceModel =
+  | "panel"
+  | "fixture"
+  | "downlight"
+  | "sconce"
+  | "fan"
+  | "exhaust"
+  | "emergency"
+  | "detector"
+  | "plate"
+  | "aircon"
+  | "heater"
+  | "box"
+  | "camera";
+
+export interface PartSpec {
+  label: string;
+  group: "Panel" | "Lighting" | "Switches" | "Power" | "Appliances" | "Low voltage";
+  va: number;
+  circuit: CircuitClass;
+  mount: Mount;
+  /** Default mounting height for wall devices (m). */
+  height?: number;
+  /** Allowed mounting-height range for wall devices (m). */
+  range?: [number, number];
+  motor?: boolean;
+  model: DeviceModel;
+  /** Name on the bill of materials. */
+  bom: string;
+}
+
+export const PART_INFO: Record<EditorPartType, PartSpec> = {
+  panel: { label: "Panelboard", group: "Panel", va: 0, circuit: "panel", mount: "wall", height: 1.5, range: [1.2, 1.8], model: "panel", bom: "Panelboard" },
+  light: { label: "Ceiling light", group: "Lighting", va: 100, circuit: "lighting", mount: "ceiling", model: "fixture", bom: "Lighting outlet (ceiling)" },
+  downlight: { label: "LED downlight", group: "Lighting", va: 15, circuit: "lighting", mount: "ceiling", model: "downlight", bom: "LED downlight (pin light)" },
+  wall_lamp: { label: "Wall lamp", group: "Lighting", va: 40, circuit: "lighting", mount: "wall", height: 1.8, range: [1.5, 2.4], model: "sconce", bom: "Wall lamp (sconce)" },
+  ceiling_fan: { label: "Ceiling fan", group: "Lighting", va: 75, circuit: "lighting", mount: "ceiling", model: "fan", bom: "Ceiling fan outlet" },
+  exhaust_fan: { label: "Exhaust fan", group: "Lighting", va: 40, circuit: "lighting", mount: "ceiling", model: "exhaust", bom: "Exhaust fan" },
+  emergency_light: { label: "Emergency light", group: "Lighting", va: 20, circuit: "lighting", mount: "wall", height: 2.2, range: [1.8, 2.6], model: "emergency", bom: "Emergency light" },
+  smoke_detector: { label: "Smoke detector", group: "Lighting", va: 5, circuit: "lighting", mount: "ceiling", model: "detector", bom: "Smoke detector" },
+  doorbell: { label: "Doorbell", group: "Switches", va: 10, circuit: "lighting", mount: "wall", height: 1.4, range: [1.0, 1.6], model: "plate", bom: "Doorbell + push button" },
+  switch: { label: "Switch", group: "Switches", va: 0, circuit: "lighting", mount: "wall", height: 1.4, range: [1.0, 1.6], model: "plate", bom: "Wall switch, 1-gang" },
+  switch_3way: { label: "3-way switch", group: "Switches", va: 0, circuit: "lighting", mount: "wall", height: 1.4, range: [1.0, 1.6], model: "plate", bom: "Wall switch, 3-way" },
+  outlet: { label: "Outlet", group: "Power", va: 180, circuit: "outlet", mount: "wall", height: 0.3, range: [0.2, 1.5], model: "plate", bom: "Duplex convenience outlet" },
+  gfci_outlet: { label: "GFCI outlet", group: "Power", va: 180, circuit: "outlet", mount: "wall", height: 1.1, range: [0.2, 1.5], model: "plate", bom: "GFCI outlet" },
+  outdoor_outlet: { label: "Weatherproof outlet", group: "Power", va: 180, circuit: "outlet", mount: "wall", height: 0.45, range: [0.3, 1.5], model: "plate", bom: "Weatherproof outlet" },
+  floor_outlet: { label: "Floor outlet", group: "Power", va: 180, circuit: "outlet", mount: "floor", model: "plate", bom: "Floor outlet box" },
+  aircon: { label: "Aircon 1.5 HP", group: "Appliances", va: 1800, circuit: "dedicated", mount: "wall", height: 2.1, range: [1.8, 2.5], motor: true, model: "aircon", bom: "Aircon outlet, 20 A" },
+  water_heater: { label: "Water heater", group: "Appliances", va: 3500, circuit: "dedicated", mount: "wall", height: 1.8, range: [1.5, 2.2], model: "heater", bom: "Water heater outlet" },
+  range_outlet: { label: "Range / cooktop", group: "Appliances", va: 6000, circuit: "dedicated", mount: "wall", height: 0.3, range: [0.2, 1.2], model: "plate", bom: "Range outlet, 2-pole 40 A" },
+  ref_outlet: { label: "Refrigerator outlet", group: "Appliances", va: 300, circuit: "dedicated", mount: "wall", height: 0.3, range: [0.2, 1.8], motor: true, model: "plate", bom: "Refrigerator outlet" },
+  washer_outlet: { label: "Washing machine", group: "Appliances", va: 1000, circuit: "dedicated", mount: "wall", height: 1.0, range: [0.3, 1.5], motor: true, model: "plate", bom: "Washing machine outlet" },
+  water_pump: { label: "Water pump 1 HP", group: "Appliances", va: 1100, circuit: "dedicated", mount: "wall", height: 0.6, range: [0.3, 1.5], motor: true, model: "box", bom: "Water pump disconnect + outlet" },
+  ev_charger: { label: "EV charger 7.4 kW", group: "Appliances", va: 7400, circuit: "dedicated", mount: "wall", height: 1.2, range: [0.8, 1.5], model: "box", bom: "EV charger (wallbox)" },
+  data_outlet: { label: "Data outlet", group: "Low voltage", va: 0, circuit: "none", mount: "wall", height: 0.3, range: [0.2, 1.5], model: "plate", bom: "Data outlet (RJ45)" },
+  tv_outlet: { label: "TV outlet", group: "Low voltage", va: 0, circuit: "none", mount: "wall", height: 0.3, range: [0.2, 1.8], model: "plate", bom: "TV / CATV outlet" },
+  cctv: { label: "CCTV camera", group: "Low voltage", va: 0, circuit: "none", mount: "wall", height: 2.4, range: [2.0, 3.0], model: "camera", bom: "CCTV camera" },
 };
+
+export const PART_TYPES = Object.keys(PART_INFO) as EditorPartType[];
 
 /** Allowed mounting-height range per wall part (m). */
-export const HEIGHT_RANGE: Partial<Record<EditorPartType, [number, number]>> = {
-  outlet: [0.2, 1.5],
-  switch: [1.0, 1.6],
-  aircon: [1.8, 2.5],
-  water_heater: [1.5, 2.2],
-  panel: [1.2, 1.8],
-};
+export const HEIGHT_RANGE: Partial<Record<EditorPartType, [number, number]>> = Object.fromEntries(
+  PART_TYPES.filter((t) => PART_INFO[t].range).map((t) => [t, PART_INFO[t].range!]),
+);
 
-export const isWallPart = (t: EditorPartType) => t !== "light";
+export const isCeiling = (t: EditorPartType) => PART_INFO[t].mount === "ceiling";
+export const isFloor = (t: EditorPartType) => PART_INFO[t].mount === "floor";
+/** Lighting loads that need a wall switch in their room. */
+export const isLightingLoad = (t: EditorPartType) =>
+  PART_INFO[t].circuit === "lighting" && !["switch", "switch_3way", "doorbell", "smoke_detector", "emergency_light"].includes(t);
+
+export const isWallPart = (t: EditorPartType) => PART_INFO[t].mount === "wall";

@@ -82,6 +82,14 @@ One-storey residential, single-phase 230 V, one panelboard, up to ~15 branch cir
 - Rooms carry their furniture when moved, rotated (position and facing), duplicated or deleted.
 - Ceiling height is 2.4–3.6 m. Lights follow the ceiling, and every ceiling-routed wire run grows by the height change on the way up and on the way down.
 
+## Library rules
+
+- Any item can be sized from 0.05 to 30 m wide/deep and 0.02 to 15 m tall.
+- Dropped inside a room it fits in, an item stays inside the walls; dropped outside every room, or too big for the room, it stays exactly where it was put (outdoors).
+- Electrical devices ride on a circuit class: lighting (lights, downlights, sconces, fans, emergency lights, smoke detectors, doorbell, switches), outlet (duplex, GFCI, weatherproof, floor; up to 8), dedicated (aircon, water heater, range, refrigerator, washer, pump, EV charger; one each), or none (data, TV, CCTV — low voltage, listed in materials only).
+- Walls are wall-aware for routing: two devices connect through the wall only when they face the same way on the same wall plane.
+- Design warnings: `NO-SWITCH` for any room with lighting loads and no switch; `GFCI-BATH` for a non-GFCI outlet in a bathroom.
+
 ## Build order (worked backward)
 
 1. **PEC engine + tests** — done when `npm test` is green. ✅
@@ -90,6 +98,7 @@ One-storey residential, single-phase 230 V, one panelboard, up to ~15 branch cir
 4. **Wiring** — daisy-chained circuits, hand-drawn wiring order, per-segment voltage drop, switches, materials. ✅ (tests: `src/editor/wiring.test.ts`)
 5. **Tinkercad-style editing** — shape library with drag-and-drop, select/move/resize/rotate/duplicate, properties panel, shortcuts, redo, snap setting, view presets. ✅ (tests: `src/editor/transform.test.ts`)
 6. **Interior + render** — furniture (14 pieces, sized within limits, recoloured, rotated), floor finish and wall paint per room, custom room size, ceiling height 2.4–3.6 m (lengthens ceiling-routed wire), render mode with shadows, day/night lighting, cutaway walls and PNG export. ✅ (tests: `src/editor/interior.test.ts`)
-7. **Outputs** — PDF load schedule, single-line diagram, BOM with PHP prices.
+7. **Full library** — ~100 furniture/architecture items (incl. people and vehicles) at any size (W/D 0.05–30 m, H 0.02–15 m), outdoor placement, and 25 electrical devices on the right circuit class. ✅ (tests: `src/editor/catalog.test.ts`)
+8. **Outputs** — PDF load schedule, single-line diagram, BOM with PHP prices.
 
 Each step is one instruction: "make the tests for step N pass, following SPEC.md".

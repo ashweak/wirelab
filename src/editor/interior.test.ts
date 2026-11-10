@@ -49,9 +49,9 @@ describe("furniture", () => {
     expect(b.z).toBe(1.4);
   });
 
-  it("refuses furniture outside any room", () => {
-    const r = addFurniture(base(), "sofa", 9, 9, 0.1);
-    expect(!r.ok && r.error).toBe("Place furniture inside a room");
+  it("places furniture outdoors when dropped outside every room", () => {
+    const d = ok(addFurniture(base(), "sofa", 9, 9, 0.1));
+    expect(d.furniture![0]).toMatchObject({ roomId: "", x: 9, z: 9 });
   });
 
   it("rotates 90° and swaps its footprint, staying inside", () => {
@@ -61,12 +61,12 @@ describe("furniture", () => {
     expect(footprint(bed(turned))).toEqual({ w: 2.0, d: 1.5 });
   });
 
-  it("resizes within the catalogue limits", () => {
+  it("resizes freely within the global limits", () => {
     const placed = ok(addFurniture(base(), "bed_double", 2, 1.5, 0.1));
     const big = ok(resizeFurniture(placed, bed(placed).id, { w: 1.8 }));
     expect(bed(big).w).toBe(1.8);
-    const r = resizeFurniture(placed, bed(placed).id, { w: 3 });
-    expect(!r.ok && r.error).toBe("Double bed width must be 1.2–2 m");
+    const r = resizeFurniture(placed, bed(placed).id, { h: 0.01 });
+    expect(!r.ok && r.error).toBe("Height must be 0.02–15 m");
   });
 
   it("moves into another room", () => {

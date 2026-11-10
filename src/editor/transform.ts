@@ -3,6 +3,7 @@ import { fitInside } from "./interior";
 import {
   HEIGHT_RANGE,
   PART_INFO,
+  isWallPart,
   type EditorDoc,
   type EditorPart,
   type Room,
@@ -58,7 +59,7 @@ function reseat(p: EditorPart, room: Room, x: number, z: number, side?: number):
   const hi = { x: room.x + room.w - MARGIN, z: room.z + room.d - MARGIN };
   const cx = r3(clamp(x, lo.x, hi.x));
   const cz = r3(clamp(z, lo.z, hi.z));
-  if (p.type === "light") return { ...p, roomId: room.id, position: [cx, p.position[1], cz] };
+  if (!isWallPart(p.type)) return { ...p, roomId: room.id, position: [cx, p.position[1], cz] };
   const y = p.position[1];
   const walls: [number, V3][] = [
     [Math.PI / 2, [r3(room.x + INSET), y, cz]],
@@ -107,7 +108,7 @@ export function resizeRoom(doc: EditorDoc, id: string, rect: Rect): Result {
       rooms: doc.rooms.map((r) => (r.id === id ? next : r)),
       parts: doc.parts.map((p) =>
         p.roomId === id
-          ? reseat(p, next, p.position[0], p.position[2], p.type === "light" ? undefined : facing(p.position, room))
+          ? reseat(p, next, p.position[0], p.position[2], !isWallPart(p.type) ? undefined : facing(p.position, room))
           : p,
       ),
       furniture: doc.furniture?.map((f) => (f.roomId === id ? fitInside(f, next) : f)),
@@ -138,7 +139,7 @@ export function rotateRoom(doc: EditorDoc, id: string): Result {
         if (p.roomId !== id) return p;
         const dx = p.position[0] - cx;
         const dz = p.position[2] - cz;
-        return reseat(p, next, cx - dz, cz + dx, p.type === "light" ? undefined : turn(facing(p.position, room)));
+        return reseat(p, next, cx - dz, cz + dx, !isWallPart(p.type) ? undefined : turn(facing(p.position, room)));
       }),
       furniture: doc.furniture?.map((f) =>
         f.roomId === id
@@ -169,7 +170,7 @@ export function setPartHeight(doc: EditorDoc, id: string, h: number): Result {
   const part = doc.parts.find((p) => p.id === id);
   if (!part) return { ok: false, error: "No such part" };
   const range = HEIGHT_RANGE[part.type];
-  if (!range) return { ok: false, error: "Lights are fixed to the ceiling" };
+  if (!range) return { ok: false, error: `${PART_INFO[part.type].label} is fixed to the ${PART_INFO[part.type].mount}` };
   if (h < range[0] || h > range[1])
     return { ok: false, error: `${PART_INFO[part.type].label} height must be ${range[0]}–${range[1]} m` };
   const moved = { ...part, height: h, position: [part.position[0], h, part.position[2]] as V3 };
@@ -181,7 +182,7 @@ export function duplicatePart(doc: EditorDoc, id: string): Result {
   const room = doc.rooms.find((r) => r.id === part?.roomId);
   if (!part || !room) return { ok: false, error: "No such part" };
   if (part.type === "panel") return { ok: false, error: "A house has one panelboard" };
-  const side = part.type === "light" ? undefined : facing(part.position, room);
+  const side = !isWallPart(part.type) ? undefined : facing(part.position, room);
   const alongX = side === undefined || side === 0 || Math.abs(side) === Math.PI;
   const [x, , z] = part.position;
   const limit = alongX ? room.x + room.w - MARGIN : room.z + room.d - MARGIN;
