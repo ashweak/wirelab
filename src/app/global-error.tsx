@@ -29,6 +29,8 @@ export default function GlobalError({ error, retry }: { error: unknown; retry: (
   const resetProject = () => {
     try {
       localStorage.removeItem("wirelab.editor.v1");
+      const cur = localStorage.getItem("wirelab.current.v1");
+      if (cur) localStorage.removeItem(`wirelab.project.${cur}`);
       sessionStorage.removeItem(RELOAD_FLAG);
     } catch {
       /* ignore */

@@ -62,6 +62,8 @@ import { ViewToggle } from "./ViewToggle";
 import PlanView, { type PlanApi } from "./PlanView";
 import ErrorBoundary from "./ErrorBoundary";
 import PdfDialog from "./PdfExport";
+import ProjectsDialog from "./ProjectsDialog";
+import * as store from "@/store/projects";
 import { SlotGrid, itemLabel, useItemPreview } from "./Inventory";
 import type { InvItem } from "./ItemPreview";
 import {
@@ -89,7 +91,6 @@ type Drag =
   | { kind: "resize"; id: string; corner: Corner; origin: EditorDoc; moved: boolean }
   | { kind: "draw"; start: [number, number] };
 
-const STORAGE_KEY = "wirelab.editor.v1";
 const EMPTY: EditorDoc = { rooms: [], parts: [], feederRunM: 10 };
 const MODEL_ICON: Record<string, string> = {
   panel: "▣",
@@ -133,14 +134,6 @@ function sanitize(d: Partial<EditorDoc>): EditorDoc {
   } as EditorDoc;
 }
 
-function load(): EditorDoc {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? sanitize(JSON.parse(raw)) : EMPTY;
-  } catch {
-    return EMPTY;
-  }
-}
 
 function Num({
   label,
@@ -262,20 +255,80 @@ export default function Editor() {
   const fileRef = useRef<HTMLInputElement>(null);
   const loaded = useRef(false);
 
+  const [meta, setMeta] = useState<store.ProjectMeta | null>(null);
+  const [projects, setProjects] = useState<store.ProjectMeta[]>([]);
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
+  const kv = (): store.KV | null => {
+    try {
+      return window.localStorage;
+    } catch {
+      return null;
+    }
+  };
+  const refreshList = () => {
+    const k = kv();
+    if (k) setProjects(store.listProjects(k));
+  };
   useEffect(() => {
-    // Restore the saved drawing after mount (localStorage is browser-only).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setDocState(load());
+    // Restore the last project after mount (localStorage is browser-only).
+    const k = kv();
+    if (k) {
+      try {
+        const b = store.bootProject(k, EMPTY);
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setDocState(sanitize(b.doc));
+        setMeta(b.meta);
+        setProjects(store.listProjects(k));
+      } catch {
+        setSaveState("error");
+      }
+    }
     loaded.current = true;
   }, []);
   useEffect(() => {
-    if (!loaded.current) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(doc));
-    } catch {
-      /* storage unavailable: keep working in memory */
-    }
-  }, [doc]);
+    if (!loaded.current || !meta) return;
+    setSaveState("saving");
+    const t = window.setTimeout(() => {
+      const k = kv();
+      try {
+        if (!k) throw new Error();
+        store.saveProject(k, meta.id, doc);
+        setSaveState("saved");
+      } catch {
+        setSaveState("error");
+      }
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [doc, meta]);
+  const switchTo = (m: store.ProjectMeta, d: EditorDoc, msg: string) => {
+    setMeta(m);
+    setDocState(sanitize(d));
+    setPast([]);
+    setFuture([]);
+    setSelection(null);
+    setCad(initial());
+    setCadSel([]);
+    refreshList();
+    say(msg);
+  };
+  const openProject = (id: string) => {
+    const k = kv();
+    const d = k && store.loadProject<EditorDoc>(k, id);
+    const m = projects.find((p) => p.id === id);
+    if (!k || !d || !m) return say("That project couldn't be opened", true);
+    store.setCurrent(k, id);
+    switchTo(m, d, `Opened ${m.name}`);
+    setProjectsOpen(false);
+  };
+  const newProject = (template: "blank" | "golden") => {
+    const k = kv();
+    if (!k) return say("This browser blocks storage, so projects can't be saved", true);
+    const d = template === "golden" ? goldenEditorDoc() : EMPTY;
+    const m = store.createProject(k, template === "golden" ? "Sample house" : "Untitled project", d);
+    switchTo(m, d, template === "golden" ? "New project from the sample house" : "New blank project");
+    setProjectsOpen(false);
+  };
 
   const shown = dragDoc ?? doc;
   const say = useCallback((text: string, bad = false) => setMessage({ text, bad }), []);
@@ -741,23 +794,30 @@ export default function Editor() {
     }
   };
 
+  const fileName = (meta?.name ?? "wirelab").replace(/[\\/:*?"<>|]/g, "").trim() || "wirelab";
   const exportJson = () => {
-    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: "application/json" });
+    const blob = new Blob([store.toFile({ name: meta?.name ?? "WireLab project" }, doc)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "wirelab-house.json";
+    a.download = `${fileName}${store.FILE_EXT}`;
     a.click();
     URL.revokeObjectURL(a.href);
+    say(`Saved ${a.download}`);
   };
   const importJson = async (file: File) => {
     try {
-      const d = JSON.parse(await file.text()) as EditorDoc;
-      if (!Array.isArray(d.rooms) || !Array.isArray(d.parts)) throw new Error();
-      commit(sanitize(d));
-      setSelection(null);
-      say(`Loaded ${file.name}`);
+      const f = store.fromFile(await file.text(), file.name);
+      const d = sanitize(f.doc as Partial<EditorDoc>);
+      const k = kv();
+      if (!k) {
+        commit(d);
+        return say(`Loaded ${file.name} (not saved: storage blocked)`, true);
+      }
+      const m = store.createProject(k, f.name, d);
+      switchTo(m, d, `Opened ${file.name} as a new project`);
+      setProjectsOpen(false);
     } catch {
-      say("That file isn't a WireLab house", true);
+      say("That file isn't a WireLab project", true);
     }
   };
 
@@ -913,7 +973,7 @@ export default function Editor() {
             preview={preview}
             ghost={ghost}
             measure={measure}
-            title={doc.rooms.length ? `WireLab project · ${doc.rooms.length} rooms` : "WireLab project"}
+            title={meta?.name ?? "WireLab project"}
             toolbar={selectionBar}
             apiRef={planApi}
             onRoomDown={onRoomDown}
@@ -1075,6 +1135,37 @@ export default function Editor() {
             ⎙ PDF
           </button>
         </div>
+        {projectsOpen && (
+          <ProjectsDialog
+            list={projects}
+            current={meta?.id ?? null}
+            onOpen={openProject}
+            onNew={newProject}
+            onRename={(id, name) => {
+              const k = kv();
+              if (!k) return;
+              store.renameProject(k, id, name);
+              if (meta?.id === id && name.trim()) setMeta({ ...meta, name: name.trim() });
+              refreshList();
+            }}
+            onDuplicate={(id) => {
+              const k = kv();
+              const m = k && store.duplicateProject(k, id);
+              if (m && k) switchTo(m, store.loadProject<EditorDoc>(k, m.id)!, `Duplicated as ${m.name}`);
+            }}
+            onDelete={(id) => {
+              const k = kv();
+              if (!k) return;
+              store.deleteProject(k, id);
+              if (meta?.id === id) {
+                const b = store.bootProject(k, EMPTY);
+                switchTo(b.meta, b.doc, `Deleted. Opened ${b.meta.name}`);
+              } else refreshList();
+            }}
+            onImport={() => fileRef.current?.click()}
+            onClose={() => setProjectsOpen(false)}
+          />
+        )}
         {pdfOpen && (
           <PdfDialog
             src={{
@@ -1084,7 +1175,7 @@ export default function Editor() {
               schedule,
               panel,
               loose: built.ok ? [] : shown.parts.filter((q) => q.type !== "panel").map((q) => deviceFor(q, shown.rooms)),
-              title: doc.rooms.length ? `WireLab project · ${doc.rooms.length} rooms` : "WireLab project",
+              title: meta?.name ?? "WireLab project",
               bom,
               est,
               capture3d: viewKind === "3d" ? () => api.current?.capture() ?? null : null,
@@ -1678,30 +1769,48 @@ export default function Editor() {
 
         <div>
           <H2>Project</H2>
+          <div className="mb-1 flex items-center gap-2">
+            <input
+              key={meta?.id}
+              defaultValue={meta?.name ?? ""}
+              onBlur={(e) => {
+                const k = kv();
+                if (!meta || !k || !e.target.value.trim() || e.target.value === meta.name) return;
+                store.renameProject(k, meta.id, e.target.value);
+                setMeta({ ...meta, name: e.target.value.trim() });
+                refreshList();
+              }}
+              onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+              className="min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold text-slate-100 hover:border-slate-700 focus:border-slate-600 focus:bg-slate-900"
+              aria-label="Project name"
+            />
+            <span
+              className={`shrink-0 font-mono text-[10px] ${saveState === "error" ? "text-red-400" : "text-slate-500"}`}
+              title={saveState === "error" ? "Browser storage is full or blocked — use Save file to keep your work" : "Saved in this browser"}
+            >
+              {saveState === "saved" ? "✓ saved" : saveState === "saving" ? "saving…" : "⚠ not saved"}
+            </span>
+          </div>
           <p className="font-mono text-xs text-slate-400">
             {doc.rooms.length} rooms · {doc.rooms.reduce((s, r) => s + r.w * r.d, 0).toFixed(1)} m² ·{" "}
             {doc.parts.length} parts
           </p>
           <div className="mt-2 flex flex-wrap gap-1.5">
+            <button onClick={() => (refreshList(), setProjectsOpen(true))} className={btn(false)}>
+              📁 Projects
+            </button>
+            <button onClick={() => newProject("blank")} className={btn(false)}>
+              New
+            </button>
             <button
               onClick={() => {
                 commit(goldenEditorDoc());
                 setSelection(null);
-                say("Loaded the golden test house");
+                say("Loaded the sample house into this project (Undo to go back)");
               }}
               className={btn(false)}
             >
-              Load golden house
-            </button>
-            <button
-              onClick={() => {
-                commit(EMPTY);
-                setSelection(null);
-                say("New blank project");
-              }}
-              className={btn(false)}
-            >
-              New
+              Load sample house
             </button>
             {wired && (
               <button
@@ -1715,18 +1824,18 @@ export default function Editor() {
               </button>
             )}
             <button onClick={exportJson} className={btn(false)}>
-              Export JSON
+              ⤓ Save file
             </button>
             <button onClick={() => setPdfOpen(true)} className={btn(false)}>
               Export PDF
             </button>
             <button onClick={() => fileRef.current?.click()} className={btn(false)}>
-              Import JSON
+              ⤒ Open file
             </button>
             <input
               ref={fileRef}
               type="file"
-              accept="application/json"
+              accept=".wirelab,.json,application/json"
               hidden
               onChange={(e) => {
                 const f = e.target.files?.[0];

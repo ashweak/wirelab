@@ -59,7 +59,7 @@ export default function PdfDialog({ src, onClose, onDone }: { src: PdfSource; on
   const [orient, setOrient] = useState<Orientation>("landscape");
   const [scale, setScale] = useState<number | "fit">("fit");
   const [sheets, setSheets] = useState<Sheets>({ floor: true, circuit: true, tables: true, view3d: !!src.capture3d });
-  const [name, setName] = useState("wirelab-plans");
+  const [name, setName] = useState(src.title.replace(/[\\/:*?"<>|]/g, "").trim() || "wirelab-plans");
   const [job, setJob] = useState<{ floor: SheetLayout; circuit: SheetLayout } | null>(null);
   const floorRef = useRef<HTMLDivElement>(null);
   const circRef = useRef<HTMLDivElement>(null);
