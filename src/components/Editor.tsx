@@ -51,16 +51,19 @@ import {
   setCeiling,
   setFinish,
   setFurnitureColor,
+  setRoomMaterials,
 } from "@/editor/interior";
 import { PART_TYPES, type FloorKind, type FurnitureType } from "@/editor/parts";
-import { ChecksView, H2, MaterialsTable, ScheduleTable } from "./ScheduleView";
+import { ChecksView, EstimateView, H2, MaterialsTable, ScheduleTable } from "./ScheduleView";
+import { CEILING_MATERIALS, WALL_MATERIALS, WALL_OF, estimate } from "@/editor/construction";
 import type { Corner, SceneApi, ViewMode, ViewName } from "./HouseScene";
 import { deviceFor, sceneCircuits } from "./sceneData";
 import { ViewToggle } from "./ViewToggle";
+import PlanView, { type PlanApi } from "./PlanView";
 
 const HouseScene = dynamic(() => import("./HouseScene"), { ssr: false });
 
-type Tool = "select" | "room" | "wire" | `place:${EditorPartType}` | `preset:${string}` | `furn:${FurnitureType}`;
+type Tool = "select" | "room" | "wire" | "measure" | `place:${EditorPartType}` | `preset:${string}` | `furn:${FurnitureType}`;
 type Selection = { kind: "room" | "part" | "furniture"; id: string } | null;
 type Drag =
   | { kind: "room"; id: string; start: [number, number]; origin: EditorDoc; moved: boolean }
@@ -97,7 +100,8 @@ const HINT: Record<string, string> = {
   wire: "Click devices in the order the wire should run from the panel. Unclicked devices chain to the nearest one.",
   place: "Click inside a room to place. Wall parts snap to the nearest wall. Esc to stop.",
   preset: "Click on the grid to drop the room. Esc to stop.",
-  furn: "Click inside a room to place. It stays inside the walls. R rotates, Esc to stop.",
+  furn: "Click to place. Doors and windows snap onto the nearest wall. R rotates, Esc to stop.",
+  measure: "Click a start point, then an end point. The distance shows on screen. Esc clears.",
 };
 
 function load(): EditorDoc {
@@ -195,6 +199,9 @@ export default function Editor() {
   const [view, setView] = useState<ViewMode>("real");
   const [clipboard, setClipboard] = useState<Selection>(null);
   const [mode, setMode] = useState<"edit" | "render">("edit");
+  const [viewKind, setViewKind] = useState<"3d" | "floor" | "circuit">("3d");
+  const [measure, setMeasure] = useState<{ a: [number, number]; b: [number, number]; live: boolean } | null>(null);
+  const planApi = useRef<PlanApi | null>(null);
   const [lighting, setLighting] = useState<"day" | "night">("day");
   const [cutaway, setCutaway] = useState(true);
   const [showWiring, setShowWiring] = useState(false);
@@ -276,6 +283,7 @@ export default function Editor() {
   );
   const extraChecks = useMemo(() => designChecks(doc), [doc]);
   const bom = useMemo(() => materials(doc), [doc]);
+  const est = useMemo(() => estimate(doc), [doc]);
   const wired = doc.parts.some((p) => p.seq !== undefined);
   const selRoom = selection?.kind === "room" ? shown.rooms.find((r) => r.id === selection.id) : undefined;
   const selPart = selection?.kind === "part" ? shown.parts.find((p) => p.id === selection.id) : undefined;
@@ -364,8 +372,20 @@ export default function Editor() {
   const onFloorDown = (x: number, z: number) => {
     if (tool === "room") setDrag({ kind: "draw", start: [snap(x, step), snap(z, step)] });
   };
-  const onFloorMove = (x: number, z: number) => setHover([x, z]);
+  const onFloorMove = (x: number, z: number) => {
+    setHover([x, z]);
+    if (tool === "measure" && measure?.live) setMeasure({ ...measure, b: [snap(x, 0.05), snap(z, 0.05)] });
+  };
   const onFloorUp = (x: number, z: number) => {
+    if (tool === "measure") {
+      const pt: [number, number] = [snap(x, 0.05), snap(z, 0.05)];
+      if (!measure || !measure.live) setMeasure({ a: pt, b: pt, live: true });
+      else {
+        setMeasure({ ...measure, b: pt, live: false });
+        say(`Measured ${Math.hypot(pt[0] - measure.a[0], pt[1] - measure.a[1]).toFixed(2)} m`);
+      }
+      return;
+    }
     if (drag?.kind === "draw") {
       const r = makeRoom(drag.start, [snap(x, step), snap(z, step)], roomKind, doc.rooms);
       setDrag(null);
@@ -516,7 +536,9 @@ export default function Editor() {
         setTool("select");
         setSelection(null);
         setDrag(null);
+        setMeasure(null);
       } else if (k === "r" && !mod) rotate();
+      else if (k === "m" && !mod) setTool("measure");
       else if (e.key.startsWith("Arrow")) {
         e.preventDefault();
         const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key]!;
@@ -533,7 +555,7 @@ export default function Editor() {
     const raw = e.dataTransfer.getData(DND);
     if (!raw) return;
     const item = JSON.parse(raw) as { kind: "preset" | "part" | "furniture"; id: string };
-    const at = api.current?.floorAt(e.clientX, e.clientY);
+    const at = viewKind === "3d" ? api.current?.floorAt(e.clientX, e.clientY) : planApi.current?.floorAt(e.clientX, e.clientY);
     if (!at) return;
     if (item.kind === "furniture") {
       const t = item.id as FurnitureType;
@@ -618,6 +640,55 @@ export default function Editor() {
       : tool.startsWith("furn:")
         ? "furn"
         : tool;
+  const selLabel = selRoom
+    ? selRoom.name
+    : selFurn
+      ? FURNITURE[selFurn.type]?.label
+      : selPart
+        ? PART_INFO[selPart.type].label
+        : null;
+  const selectionBar = selLabel ? (
+    <div className="flex items-center gap-1 rounded-lg border border-amber-400/70 bg-slate-950/95 px-1.5 py-1 text-[11px] text-slate-200 shadow-lg">
+      <span className="max-w-32 truncate px-1 font-semibold text-amber-300">{selLabel}</span>
+      {!selPart && (
+        <button onClick={rotate} className="rounded px-1.5 py-0.5 hover:bg-slate-800" title="Rotate 90° (R)">
+          ⟳ Rotate
+        </button>
+      )}
+      {selPart?.type !== "panel" && (
+        <button onClick={() => duplicate()} className="rounded px-1.5 py-0.5 hover:bg-slate-800" title="Duplicate (Ctrl+D)">
+          ⧉ Copy
+        </button>
+      )}
+      {selPart && HEIGHT_RANGE[selPart.type] && (
+        <>
+          <button onClick={() => apply(setPartHeight(doc, selPart.id, Math.round((selPart.position[1] - 0.1) * 100) / 100))} className="rounded px-1.5 py-0.5 hover:bg-slate-800" title="Lower 10 cm">
+            ↓
+          </button>
+          <span className="font-mono text-slate-400">{selPart.position[1].toFixed(2)} m</span>
+          <button onClick={() => apply(setPartHeight(doc, selPart.id, Math.round((selPart.position[1] + 0.1) * 100) / 100))} className="rounded px-1.5 py-0.5 hover:bg-slate-800" title="Raise 10 cm">
+            ↑
+          </button>
+        </>
+      )}
+      {selFurn && (
+        <span className="font-mono text-slate-400">
+          {selFurn.w.toFixed(2)}×{selFurn.d.toFixed(2)}×{selFurn.h.toFixed(2)}
+        </span>
+      )}
+      {selRoom && (
+        <span className="font-mono text-slate-400">
+          {selRoom.w.toFixed(2)}×{selRoom.d.toFixed(2)} m
+        </span>
+      )}
+      <button onClick={del} className="rounded px-1.5 py-0.5 text-red-300 hover:bg-red-500/20" title="Delete (Del)">
+        ✕
+      </button>
+      <button onClick={() => setSelection(null)} className="rounded px-1.5 py-0.5 text-slate-400 hover:bg-slate-800" title="Deselect (Esc)">
+        ○
+      </button>
+    </div>
+  ) : null;
   const saveImage = () => {
     const url = api.current?.capture();
     if (!url) return;
@@ -634,7 +705,36 @@ export default function Editor() {
         onDragOver={(e) => e.preventDefault()}
         onDrop={onDrop}
       >
+        {viewKind !== "3d" ? (
+          <PlanView
+            doc={shown}
+            mode={viewKind}
+            circuits={circuits}
+            schedule={schedule}
+            panel={panel}
+            loose={built.ok ? [] : shown.parts.filter((q) => q.type !== "panel").map((q) => deviceFor(q, shown.rooms))}
+            selection={selection}
+            dragging={!!drag && drag.kind !== "draw"}
+            panOnEmpty={tool === "select" || tool === "wire"}
+            preview={preview}
+            ghost={ghost}
+            measure={measure}
+            title={doc.rooms.length ? `WireLab project · ${doc.rooms.length} rooms` : "WireLab project"}
+            toolbar={selectionBar}
+            apiRef={planApi}
+            onRoomDown={onRoomDown}
+            onPartDown={onPartDown}
+            onFurnitureDown={onFurnitureDown}
+            onHandleDown={onHandleDown}
+            onFloorDown={onFloorDown}
+            onFloorMove={onFloorMove}
+            onFloorUp={onFloorUp}
+            onDragMove={onDragMove}
+            onDragEnd={onDragEnd}
+          />
+        ) : (
         <HouseScene
+          measure={measure}
           rooms={shown.rooms}
           panel={panel}
           circuits={circuits}
@@ -668,6 +768,10 @@ export default function Editor() {
             apiRef: api,
           }}
         />
+        )}
+        {viewKind === "3d" && selectionBar && (
+          <div className="absolute left-1/2 top-24 z-20 -translate-x-1/2">{selectionBar}</div>
+        )}
 
         {/* Toolbar */}
         <div className="absolute left-3 right-3 top-3 flex flex-wrap items-center gap-1.5">
@@ -676,6 +780,7 @@ export default function Editor() {
               ["select", "↖ Select"],
               ["room", "▭ Draw room"],
               ["wire", "〰 Wire"],
+              ["measure", "📏 Measure"],
             ] as const
           ).map(([t, label]) => (
             <button key={t} onClick={() => setTool(t)} className={`${btn(tool === t)} bg-slate-900/90`}>
@@ -703,31 +808,56 @@ export default function Editor() {
               ))}
             </select>
           </label>
-          <div className="ml-auto flex overflow-hidden rounded-md border border-amber-400/60 text-[11px]">
-            {(["edit", "render"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                className={`px-2.5 py-1 capitalize ${mode === m ? "bg-amber-400 text-slate-900" : "bg-slate-900/90 text-slate-300"}`}
-              >
-                {m === "edit" ? "✎ Edit" : "◐ Render"}
-              </button>
-            ))}
-          </div>
-          <div className="flex overflow-hidden rounded-md border border-slate-700 text-[11px]">
-            {(["home", "top", "front", "fit"] as ViewName[]).map((v) => (
+          <div className="ml-auto flex overflow-hidden rounded-md border border-sky-400/60 text-[11px]">
+            {(
+              [
+                ["3d", "◆ 3D"],
+                ["floor", "▦ Floor plan"],
+                ["circuit", "⚡ Circuit plan"],
+              ] as const
+            ).map(([v, label]) => (
               <button
                 key={v}
-                onClick={() => api.current?.setView(v)}
-                className="bg-slate-900/90 px-2 py-1 capitalize text-slate-300 hover:bg-slate-800"
+                onClick={() => setViewKind(v)}
+                className={`px-2.5 py-1 ${viewKind === v ? "bg-sky-400 text-slate-900" : "bg-slate-900/90 text-slate-300"}`}
               >
-                {v}
+                {label}
               </button>
             ))}
           </div>
+          {viewKind === "3d" ? (
+            <>
+              <div className="flex overflow-hidden rounded-md border border-amber-400/60 text-[11px]">
+                {(["edit", "render"] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setMode(m)}
+                    className={`px-2.5 py-1 capitalize ${mode === m ? "bg-amber-400 text-slate-900" : "bg-slate-900/90 text-slate-300"}`}
+                  >
+                    {m === "edit" ? "✎ Edit" : "◐ Render"}
+                  </button>
+                ))}
+              </div>
+              <div className="flex overflow-hidden rounded-md border border-slate-700 text-[11px]">
+                {(["home", "top", "front", "fit"] as ViewName[]).map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => api.current?.setView(v)}
+                    className="bg-slate-900/90 px-2 py-1 capitalize text-slate-300 hover:bg-slate-800"
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <button onClick={() => planApi.current?.fit()} className={`${btn(false)} bg-slate-900/90`}>
+              ⤢ Fit sheet
+            </button>
+          )}
         </div>
 
-        {mode === "render" && (
+        {viewKind === "3d" && mode === "render" && (
           <div className="absolute right-3 top-12 flex flex-wrap items-center justify-end gap-1.5 text-[11px]">
             <div className="flex overflow-hidden rounded-md border border-slate-700">
               {(["day", "night"] as const).map((l) => (
@@ -867,8 +997,12 @@ export default function Editor() {
           </p>
         </div>
 
-        <ViewToggle view={view} setView={setView} />
-        <p className="pointer-events-none absolute bottom-3 left-3 right-56 font-mono text-[10px] text-slate-400">
+        {viewKind === "3d" && <ViewToggle view={view} setView={setView} />}
+        <p
+          className={`pointer-events-none absolute bottom-3 left-3 font-mono text-[10px] ${
+            viewKind === "3d" ? "right-56 text-slate-400" : "right-72 text-slate-500"
+          }`}
+        >
           {HINT[hintKey]}
         </p>
       </section>
@@ -965,6 +1099,35 @@ export default function Editor() {
                         aria-label="Floor colour"
                       />
                     </div>
+                  </label>
+                  <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-slate-500">
+                    Wall system
+                    <select
+                      value={selRoom.wallMat ?? "chb100"}
+                      onChange={(e) => commit(setRoomMaterials(doc, selRoom.id, { wallMat: e.target.value }))}
+                      className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs normal-case tracking-normal text-slate-200"
+                    >
+                      {WALL_MATERIALS.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label} · {Math.round(m.thickness * 1000)} mm
+                        </option>
+                      ))}
+                    </select>
+                    <span className="normal-case tracking-normal text-slate-500">{WALL_OF(selRoom).note}</span>
+                  </label>
+                  <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-slate-500">
+                    Ceiling
+                    <select
+                      value={selRoom.ceilingMat ?? "gypsum"}
+                      onChange={(e) => commit(setRoomMaterials(doc, selRoom.id, { ceilingMat: e.target.value }))}
+                      className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs normal-case tracking-normal text-slate-200"
+                    >
+                      {CEILING_MATERIALS.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
                   </label>
                   <div className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-slate-500">
                     Wall paint
@@ -1174,6 +1337,7 @@ export default function Editor() {
                 still downstream. Lights up to 12 per circuit, outlets up to 8, appliances on their own.
               </p>
               <MaterialsTable lines={bom} />
+              <EstimateView est={est} />
             </>
           ) : (
             <p className="text-sm text-slate-400">Add lights, outlets or appliances to see the load schedule.</p>

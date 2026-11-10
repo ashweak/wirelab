@@ -1,12 +1,13 @@
 "use client";
 
 import { Canvas, useThree, type ThreeEvent } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
+import { Line, OrbitControls } from "@react-three/drei";
 import { useEffect, useMemo, useRef, type MutableRefObject } from "react";
 import { BoxGeometry as BoxGeometryImpl, CanvasTexture, Plane, Raycaster, SRGBColorSpace, Vector2, Vector3 } from "three";
 import type { OrbitControls as OrbitImpl } from "three-stdlib";
 import { CEILING } from "@/data/goldenHouse";
-import { defaultFinish } from "@/editor/interior";
+import { defaultFinish, FURNITURE } from "@/editor/interior";
+import { WALL_OF, roomSides } from "@/editor/construction";
 import { PART_INFO, type FloorKind, type Furniture, type Room } from "@/editor/parts";
 import { Environment, Lightformer } from "@react-three/drei";
 import { floorTexture } from "./textures";
@@ -66,11 +67,11 @@ interface Props {
   lighting?: "day" | "night";
   showWiring?: boolean;
   cutaway?: boolean;
+  measure?: { a: [number, number]; b: [number, number] } | null;
 }
 
 const PVC = "#e8792b";
 const PLATE = "#f4f1ea";
-const WALL_T = 0.1;
 const CONDUIT_R = 0.022;
 
 /** Text label drawn to a canvas texture (no DOM overlay, no font download). */
@@ -421,19 +422,38 @@ function Walls({
   render: boolean;
   wallH: number;
 }) {
+  const sides = useMemo(() => roomSides(rooms as Room[]), [rooms]);
   return (
     <group>
       {rooms.map((r) => {
-        const fin = defaultFinish({ ...r, kind: r.kind ?? "other" } as Room);
+        const fin = defaultFinish({ kind: r.kind ?? "other" });
         const floor = r.floor ?? fin.floor;
-        const paint = r.wall ?? fin.wall;
-        // Each room draws its own wall skin just inside its outline, so shared walls never z-fight.
-        const t = WALL_T / 2;
+        const mat = WALL_OF(r as Room);
+        const exposed = ["brick100", "plywood", "concrete150"].includes(mat.id);
+        const paint = r.wall ?? (exposed ? mat.color : fin.wall);
+        const side = sides[r.id] ?? { left: false, right: false, front: false, back: false };
+        // Shared walls: each room draws the half on its own side (no z-fighting, own paint).
+        // Exterior walls: the full thickness, centred on the outline, with corners closed.
+        const T = mat.thickness;
+        const half = T / 2;
+        const xw = (shared: boolean, x0: number, inward: number) =>
+          shared ? { c: x0 + (inward * half) / 2, t: half } : { c: x0, t: T };
+        const L = xw(side.left, r.x, 1);
+        const Rt = xw(side.right, r.x + r.w, -1);
+        const F = xw(side.front, r.z, 1);
+        const Bk = xw(side.back, r.z + r.d, -1);
+        const ext = (shared: boolean) => (shared ? 0 : half);
         const walls: { pos: V3; size: V3 }[] = [
-          { pos: [r.x + t / 2, wallH / 2, r.z + r.d / 2], size: [t, wallH, r.d] },
-          { pos: [r.x + r.w - t / 2, wallH / 2, r.z + r.d / 2], size: [t, wallH, r.d] },
-          { pos: [r.x + r.w / 2, wallH / 2, r.z + t / 2], size: [r.w, wallH, t] },
-          { pos: [r.x + r.w / 2, wallH / 2, r.z + r.d - t / 2], size: [r.w, wallH, t] },
+          { pos: [L.c, wallH / 2, r.z + r.d / 2], size: [L.t, wallH, r.d] },
+          { pos: [Rt.c, wallH / 2, r.z + r.d / 2], size: [Rt.t, wallH, r.d] },
+          {
+            pos: [r.x + r.w / 2 + (ext(side.right) - ext(side.left)) / 2, wallH / 2, F.c],
+            size: [r.w + ext(side.left) + ext(side.right), wallH, F.t],
+          },
+          {
+            pos: [r.x + r.w / 2 + (ext(side.right) - ext(side.left)) / 2, wallH / 2, Bk.c],
+            size: [r.w + ext(side.left) + ext(side.right), wallH, Bk.t],
+          },
         ];
         return (
           <group key={r.id}>
@@ -669,6 +689,7 @@ export default function HouseScene({
   lighting = "day",
   showWiring = true,
   cutaway = false,
+  measure = null,
 }: Props) {
   const render = mode === "render";
   const night = render && lighting === "night";
@@ -779,7 +800,7 @@ export default function HouseScene({
       )}
 
       <Walls rooms={rooms} selected={selRoom?.id} onDown={grab(editor?.onRoomDown)} render={render} wallH={wallH} />
-      {furniture.map((f) => (
+      {furniture.filter((f) => !(render && cutaway && FURNITURE[f.type]?.wallMount)).map((f) => (
         <FurnitureMesh
           key={f.id}
           f={f}
@@ -839,6 +860,32 @@ export default function HouseScene({
         </group>
       )}
 
+      {measure && (
+        <group>
+          <Line
+            points={[
+              [measure.a[0], 0.06, measure.a[1]],
+              [measure.b[0], 0.06, measure.b[1]],
+            ]}
+            color="#dc2626"
+            lineWidth={2.5}
+            depthTest={false}
+          />
+          {[measure.a, measure.b].map((q, i) => (
+            <mesh key={i} position={[q[0], 0.06, q[1]]} raycast={() => null}>
+              <sphereGeometry args={[0.07, 12, 12]} />
+              <meshBasicMaterial color="#dc2626" depthTest={false} />
+            </mesh>
+          ))}
+          <Label
+            text={`${Math.hypot(measure.b[0] - measure.a[0], measure.b[1] - measure.a[1]).toFixed(2)} m`}
+            position={[(measure.a[0] + measure.b[0]) / 2, 0.45, (measure.a[1] + measure.b[1]) / 2]}
+            height={0.32}
+            color="#ffffff"
+            bg="#dc2626"
+          />
+        </group>
+      )}
       {loose.filter((d) => !above(d)).map((d) => (
         <Device
           key={d.id}

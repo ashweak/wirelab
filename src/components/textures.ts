@@ -2,7 +2,18 @@ import { CanvasTexture, RepeatWrapping, SRGBColorSpace, type Texture } from "thr
 import type { FloorKind } from "@/editor/parts";
 
 /** Metres covered by one texture tile, per finish. */
-export const TILE_M: Record<FloorKind, number> = { tile: 2.4, wood: 2.4, vinyl: 2.4, concrete: 3 };
+export const TILE_M: Record<FloorKind, number> = {
+  tile: 1.2,
+  porcelain60: 2.4,
+  granite: 2.4,
+  marble: 2.4,
+  vinyl: 2.4,
+  wood: 2.4,
+  parquet: 1.2,
+  concrete: 3,
+  epoxy: 3,
+  carpet: 2,
+};
 
 const cache = new Map<string, CanvasTexture>();
 
@@ -25,19 +36,57 @@ function paint(kind: FloorKind, color: string, ctx: CanvasRenderingContext2D, S:
   const r = rng(kind.length * 97 + parseInt(color.slice(1), 16));
   ctx.fillStyle = color;
   ctx.fillRect(0, 0, S, S);
-  if (kind === "tile") {
-    const n = 4; // 0.6 m tiles
+  if (kind === "tile" || kind === "porcelain60" || kind === "granite" || kind === "marble" || kind === "carpet") {
+    const n = 4; // TILE_M / 4 per tile: 0.3 m ceramic, 0.6 m porcelain/stone, 0.5 m carpet
     const t = S / n;
     for (let i = 0; i < n; i++)
       for (let j = 0; j < n; j++) {
         ctx.fillStyle = shade(color, 0.95 + r() * 0.1);
         ctx.fillRect(i * t + 2, j * t + 2, t - 4, t - 4);
       }
-    ctx.fillStyle = shade(color, 0.72);
-    for (let i = 0; i <= n; i++) {
-      ctx.fillRect(i * t - 2, 0, 4, S);
-      ctx.fillRect(0, i * t - 2, S, 4);
+    if (kind === "granite" || kind === "carpet") {
+      for (let i = 0; i < 14000; i++) {
+        ctx.fillStyle = shade(color, kind === "granite" ? 0.55 + r() * 0.9 : 0.85 + r() * 0.3);
+        ctx.globalAlpha = kind === "granite" ? 0.5 : 0.35;
+        ctx.fillRect(r() * S, r() * S, 1.5 + r() * 2, 1.5 + r() * 2);
+      }
+      ctx.globalAlpha = 1;
     }
+    if (kind === "marble") {
+      ctx.strokeStyle = shade(color, 0.7);
+      ctx.globalAlpha = 0.35;
+      for (let v = 0; v < 10; v++) {
+        let x = r() * S;
+        let y = 0;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        while (y < S) {
+          x += (r() - 0.5) * 40;
+          y += 20 + r() * 30;
+          ctx.lineTo(x, y);
+        }
+        ctx.lineWidth = 1 + r() * 2;
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.fillStyle = shade(color, kind === "carpet" ? 0.9 : 0.72);
+    for (let i = 0; i <= n; i++) {
+      ctx.fillRect(i * t - (kind === "carpet" ? 1 : 2), 0, kind === "carpet" ? 2 : 4, S);
+      ctx.fillRect(0, i * t - (kind === "carpet" ? 1 : 2), S, kind === "carpet" ? 2 : 4);
+    }
+  } else if (kind === "parquet") {
+    const n = 8;
+    const t = S / n;
+    for (let i = 0; i < n; i++)
+      for (let j = 0; j < n; j++) {
+        const vertical = (i + j) % 2 === 0;
+        for (let k = 0; k < 4; k++) {
+          ctx.fillStyle = shade(color, 0.82 + r() * 0.3);
+          if (vertical) ctx.fillRect(i * t + (k * t) / 4 + 1, j * t + 1, t / 4 - 2, t - 2);
+          else ctx.fillRect(i * t + 1, j * t + (k * t) / 4 + 1, t - 2, t / 4 - 2);
+        }
+      }
   } else if (kind === "wood" || kind === "vinyl") {
     const rows = kind === "wood" ? 12 : 8;
     const h = S / rows;

@@ -28,7 +28,17 @@ export type EditorPartType =
   | "cctv";
 export type V3 = [number, number, number];
 
-export type FloorKind = "tile" | "wood" | "concrete" | "vinyl";
+export type FloorKind =
+  | "tile"
+  | "porcelain60"
+  | "granite"
+  | "marble"
+  | "vinyl"
+  | "wood"
+  | "parquet"
+  | "concrete"
+  | "epoxy"
+  | "carpet";
 
 export interface Room {
   id: string;
@@ -41,6 +51,10 @@ export interface Room {
   floor?: { kind: FloorKind; color: string };
   /** Wall paint colour. */
   wall?: string;
+  /** Wall system id (see WALL_MATERIALS); CHB 4" when absent. */
+  wallMat?: string;
+  /** Ceiling system id (see CEILING_MATERIALS); gypsum when absent. */
+  ceilingMat?: string;
 }
 
 /** Catalogue key, e.g. "bed_double" or "car_sedan" (see FURNITURE in interior.ts). */

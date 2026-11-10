@@ -90,6 +90,15 @@ One-storey residential, single-phase 230 V, one panelboard, up to ~15 branch cir
 - Walls are wall-aware for routing: two devices connect through the wall only when they face the same way on the same wall plane.
 - Design warnings: `NO-SWITCH` for any room with lighting loads and no switch; `GFCI-BATH` for a non-GFCI outlet in a bathroom.
 
+## Construction rules
+
+- Wall thickness comes from the wall system (CHB 4" = 100 mm, CHB 6" = 150 mm, …). Shared walls are counted once; exterior walls are drawn at full thickness.
+- Wall area = wall run × ceiling height − door and window openings in that room.
+- 4" CHB: 12.5 blocks/m² + 5% waste, 0.50 bags cement and 0.035 m³ sand per m²; 6" CHB: 0.65 bags and 0.045 m³ (AEDO Construction planning ratios). Plaster both faces.
+- Boards (gypsum, fiber cement, plywood) in 4 × 8 ft sheets + 10%; studs at 0.6 m.
+- Tiles counted from their size + 5%; adhesive ≈ 1 bag per 4 m².
+- Doors and windows snap onto the nearest wall line of the room they're dropped in, width along the wall.
+
 ## Build order (worked backward)
 
 1. **PEC engine + tests** — done when `npm test` is green. ✅
@@ -99,6 +108,7 @@ One-storey residential, single-phase 230 V, one panelboard, up to ~15 branch cir
 5. **Tinkercad-style editing** — shape library with drag-and-drop, select/move/resize/rotate/duplicate, properties panel, shortcuts, redo, snap setting, view presets. ✅ (tests: `src/editor/transform.test.ts`)
 6. **Interior + render** — furniture (14 pieces, sized within limits, recoloured, rotated), floor finish and wall paint per room, custom room size, ceiling height 2.4–3.6 m (lengthens ceiling-routed wire), render mode with shadows, day/night lighting, cutaway walls and PNG export. ✅ (tests: `src/editor/interior.test.ts`)
 7. **Full library** — ~100 furniture/architecture items (incl. people and vehicles) at any size (W/D 0.05–30 m, H 0.02–15 m), outdoor placement, and 25 electrical devices on the right circuit class. ✅ (tests: `src/editor/catalog.test.ts`)
-8. **Outputs** — PDF load schedule, single-line diagram, BOM with PHP prices.
+8. **Construction + plans** — wall systems (CHB 4"/6", AAC, brick, concrete, drywall, fiber cement, plywood) at real thickness, 10 floor finishes, 6 ceiling systems, door/window types that snap into walls, a construction estimate, editable 2D floor plan and circuit plan sheets (border, title block, dimensions, symbols, legend, panel schedule, scale bar), a measure tool and a click-object toolbar. ✅ (tests: `src/editor/construction.test.ts`)
+9. **Outputs** — PDF load schedule, single-line diagram, BOM with PHP prices.
 
 Each step is one instruction: "make the tests for step N pass, following SPEC.md".

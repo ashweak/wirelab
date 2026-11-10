@@ -302,6 +302,17 @@ const GOLDEN_FURNITURE: [FurnitureType, string, number, number, Furniture["rot"]
   ["wardrobe", "bed2", 6.65, 7.1, 90],
   ["bed_single", "bed3", 8.0, 5.1, 0],
   ["desk", "bed3", 9.65, 6.9, 90],
+  ["panel_door", "living", 1.2, 0, 0],
+  ["flush_door", "living", 0.7, 4, 0],
+  ["flush_door", "living", 4.6, 4, 0],
+  ["flush_door", "kitchen", 7.6, 4, 0],
+  ["pvc_door", "kitchen", 8.5, 1.2, 0],
+  ["sliding_window", "living", 4.1, 0, 0],
+  ["awning_window", "kitchen", 6.75, 0, 0],
+  ["jalousie_window", "bath", 10, 2.5, 0],
+  ["casement_window", "bed1", 1.75, 8, 0],
+  ["casement_window", "bed2", 5.25, 8, 0],
+  ["casement_window", "bed3", 8.5, 8, 0],
 ];
 
 export function goldenFurniture(rooms: Room[]): Furniture[] {

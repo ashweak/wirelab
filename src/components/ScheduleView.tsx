@@ -1,7 +1,9 @@
 "use client";
 
 import { RULES } from "@/engine/rules";
+import { Fragment } from "react";
 import type { CheckResult, Schedule } from "@/engine/types";
+import type { Estimate } from "@/editor/construction";
 import { colorFor } from "./colors";
 
 export const H2 = ({ children }: { children: React.ReactNode }) => (
@@ -135,6 +137,69 @@ export function ScheduleTable({
       </div>
       <p className="mt-1.5 text-[11px] text-slate-500">
         Hover a row to isolate its circuit in 3D. Main includes 25% of the largest motor load.
+      </p>
+    </div>
+  );
+}
+
+export function EstimateView({ est }: { est: Estimate }) {
+  const section = (title: string, groups: Estimate["walls"]) =>
+    groups.length > 0 && (
+      <>
+        <tr className="bg-slate-900">
+          <td colSpan={3} className="px-2 py-1 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+            {title}
+          </td>
+        </tr>
+        {groups.map((g) => (
+          <Fragment key={g.material}>
+            <tr className="border-t border-slate-800">
+              <td className="px-2 pt-1.5 text-slate-200">{g.label}</td>
+              <td className="px-2 pt-1.5 text-right font-mono text-slate-400">{g.areaM2}</td>
+              <td className="w-10 px-2 pt-1.5 font-mono text-slate-500">m²</td>
+            </tr>
+            {g.items.map((i) => (
+              <tr key={i.item}>
+                <td className="py-0.5 pl-5 pr-2 text-slate-400">{i.item}</td>
+                <td className="px-2 py-0.5 text-right font-mono text-white">{i.qty}</td>
+                <td className="px-2 py-0.5 font-mono text-slate-500">{i.unit}</td>
+              </tr>
+            ))}
+          </Fragment>
+        ))}
+      </>
+    );
+  return (
+    <div>
+      <H2>Construction estimate</H2>
+      <div className="overflow-x-auto rounded-md border border-slate-800">
+        <table className="w-full text-[12px]">
+          <tbody>
+            {section("Walls (openings deducted)", est.walls)}
+            {section("Floors", est.floors)}
+            {section("Ceilings", est.ceilings)}
+            {est.openings.length > 0 && (
+              <>
+                <tr className="bg-slate-900">
+                  <td colSpan={3} className="px-2 py-1 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+                    Doors and windows
+                  </td>
+                </tr>
+                {est.openings.map((o) => (
+                  <tr key={o.item} className="border-t border-slate-800">
+                    <td className="px-2 py-1 text-slate-300">{o.item}</td>
+                    <td className="px-2 py-1 text-right font-mono text-white">{o.qty}</td>
+                    <td className="px-2 py-1 font-mono text-slate-500">{o.unit}</td>
+                  </tr>
+                ))}
+              </>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-1.5 text-[11px] text-slate-500">
+        Planning quantities with waste (CHB 12.5/m² + 5%, mortar 0.5–0.65 bags/m², boards 4 × 8 ft + 10%). Have a
+        quantity surveyor confirm before ordering.
       </p>
     </div>
   );

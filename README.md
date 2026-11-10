@@ -10,6 +10,10 @@ A browser 3D wiring lab for Filipino electrical engineers: place parts in a hous
 
 ![Library: people, vehicles, outdoor](docs/library.png)
 
+![Floor plan](docs/floor-plan.png)
+
+![Circuit plan](docs/circuit-plan.png)
+
 ## What works now
 
 - 3D golden test house (3-bedroom bungalow, 80 m², 5 circuits, 30 parts) with color-coded wiring
@@ -21,6 +25,9 @@ A browser 3D wiring lab for Filipino electrical engineers: place parts in a hous
 - **Tinkercad-style editor:** drag rooms and electrical parts from a shape library onto the work plane; click to select, drag to move, pull corner handles to resize, rotate 90°, duplicate, copy/paste, delete; edit name, type, size and mounting height in a properties panel; undo/redo, snap grid 0.1–1 m, Home/Top/Front/Fit views, keyboard shortcuts (Del, Ctrl+D, Ctrl+Z, Ctrl+Shift+Z, R, arrows)
 - **Full library (searchable):** ~100 items in 12 groups — bedroom, living, dining, kitchen, bath, office, commercial, architecture (doors, windows, stairs, ramps, columns, railings, partitions), outdoor (trees, palms, pool, fence), utility, people for scale, and vehicles (sedan, SUV, pickup, van, jeepney, truck, motorcycle, tricycle, bicycle); any size from 5 cm to 30 m; outdoor placement
 - **25 electrical devices:** lights, downlights, sconces, ceiling/exhaust fans, emergency lights, smoke detectors, doorbell, 1- and 3-way switches, duplex/GFCI/weatherproof/floor outlets, aircon, water heater, range, refrigerator, washer, water pump, EV charger, data, TV and CCTV — each on the right circuit type
+- **Construction materials:** wall systems (CHB 4"/6", AAC, clay brick, cast concrete, gypsum drywall, fiber cement, plywood) drawn at their real thickness; 10 floor finishes (ceramic, porcelain, granite, marble, vinyl, engineered wood, parquet, polished concrete, epoxy, carpet tile); 6 ceiling systems; door and window types (panel, flush, PVC, folding, roll-up; awning, casement, sliding, jalousie, fixed, transom) that snap into walls; a construction estimate (CHB, cement, sand, boards, studs, tiles, adhesive) with openings deducted
+- **Floor plan & circuit plan:** editable 2D sheets with border and title block, hatched walls, door swings, windows, room and overall dimensions, standard electrical symbols, colour-coded circuit runs, legend, panel schedule and scale bar; pan/zoom and the same select/move/resize tools as 3D
+- **Measure tool** in every view, and a toolbar on any clicked object (rotate, copy, raise/lower, size, delete)
 - **Interior + render:** 14 furniture pieces you can size, recolour and rotate; floor finish (tile, wood, vinyl, concrete) and wall paint per room; custom room size; ceiling height that updates the wire runs; a render mode with soft shadows, studio lighting, procedural floor textures, day/night (ceiling lights light the rooms at night), cutaway walls and PNG export
 - **Design your own:** draw rooms on a grid, place panel, lights, outlets, aircon and water heater (snapped to code mounting heights), and get auto-grouped circuits with a live load schedule; undo, autosave, JSON import/export
 

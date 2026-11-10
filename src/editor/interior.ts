@@ -1,4 +1,5 @@
 import { CEILING } from "@/data/goldenHouse";
+import { FLOOR_MATERIALS } from "./floors";
 import { roomAt, snap } from "./editor";
 import { PART_INFO, type EditorDoc, type FloorKind, type Furniture, type FurnitureType, type Room } from "./parts";
 
@@ -30,7 +31,7 @@ export type ModelKind =
   | "piano" | "board" | "partition" | "glass" | "door" | "window" | "column" | "round_column" | "stairs" | "ramp"
   | "railing" | "fence" | "tree" | "palm" | "shrub" | "plant" | "pool" | "tank" | "bin" | "post" | "box"
   | "ac_outdoor" | "solar" | "person" | "wheelchair" | "car" | "pickup" | "van" | "jeepney" | "truck" | "moto"
-  | "tricycle" | "bicycle";
+  | "tricycle" | "bicycle" | "jalousie" | "roller_door";
 
 export interface FurnitureSpec {
   label: string;
@@ -42,6 +43,8 @@ export interface FurnitureSpec {
   model: ModelKind;
   /** Height above the floor the item hangs at (windows, upper cabinets). */
   lift?: number;
+  /** Doors and windows: snap onto the nearest wall line, aligned with it. */
+  wallMount?: boolean;
 }
 
 /** Any size is allowed between these bounds (m). */
@@ -128,6 +131,17 @@ const ROWS: Row[] = [
   ["railing", "Railing", "Architecture", 2.0, 0.05, 1.0, "#5c6670", "railing"],
   ["partition_wall", "Partition wall", "Architecture", 2.0, 0.1, 2.7, "#e6e0d4", "partition"],
   ["glass_partition", "Glass partition", "Architecture", 2.0, 0.05, 2.4, "#bcd6e3", "glass"],
+  ["panel_door", "Panel door (wood)", "Architecture", 0.9, 0.12, 2.1, "#7a5232", "door"],
+  ["flush_door", "Flush door", "Architecture", 0.8, 0.12, 2.1, "#c8a77e", "door"],
+  ["pvc_door", "PVC bathroom door", "Architecture", 0.7, 0.12, 2.1, "#e9e6df", "door"],
+  ["folding_door", "Folding door", "Architecture", 1.8, 0.12, 2.1, "#d9d2c3", "door"],
+  ["garage_door", "Roll-up garage door", "Architecture", 2.7, 0.15, 2.4, "#9aa3ad", "roller_door"],
+  ["awning_window", "Awning window", "Architecture", 0.76, 0.12, 0.91, "#bcd6e3", "window", 1.2],
+  ["casement_window", "Casement window", "Architecture", 0.91, 0.12, 0.91, "#bcd6e3", "window", 1.0],
+  ["sliding_window", "Sliding window", "Architecture", 1.22, 0.12, 0.91, "#bcd6e3", "window", 1.0],
+  ["jalousie_window", "Jalousie window", "Architecture", 0.6, 0.12, 0.9, "#bcd6e3", "jalousie", 1.2],
+  ["fixed_window", "Fixed picture window", "Architecture", 1.5, 0.12, 1.2, "#bcd6e3", "window", 0.9],
+  ["transom", "Transom / vent window", "Architecture", 0.9, 0.12, 0.3, "#bcd6e3", "jalousie", 2.15],
   // Outdoor
   ["tree", "Shade tree", "Outdoor", 3.0, 3.0, 5.0, "#3f7a3a", "tree"],
   ["palm", "Palm tree", "Outdoor", 2.5, 2.5, 6.0, "#4b8a3c", "palm"],
@@ -164,10 +178,23 @@ const ROWS: Row[] = [
   ["bicycle", "Bicycle", "Vehicles", 1.75, 0.6, 1.05, "#2f5f8a", "bicycle"],
 ];
 
+const WALL_MOUNT = new Set(["door", "window", "glass", "jalousie", "roller_door"]);
+const WALL_MOUNT_IDS = new Set(["sliding_door"]);
+
 export const FURNITURE: Record<string, FurnitureSpec> = Object.fromEntries(
   ROWS.map(([id, label, group, w, d, h, color, model, lift]) => [
     id,
-    { label, group, w, d, h, color, model, ...(lift ? { lift } : {}) },
+    {
+      label,
+      group,
+      w,
+      d,
+      h,
+      color,
+      model,
+      ...(lift ? { lift } : {}),
+      ...((WALL_MOUNT.has(model) && model !== "glass") || WALL_MOUNT_IDS.has(id) ? { wallMount: true } : {}),
+    },
   ]),
 );
 
@@ -186,26 +213,26 @@ export const FURNITURE_GROUPS: FurnitureGroup[] = [
   "Vehicles",
 ];
 
-export const FLOOR_KINDS: { kind: FloorKind; label: string; color: string }[] = [
-  { kind: "tile", label: "Ceramic tile", color: "#d8d2c6" },
-  { kind: "wood", label: "Wood planks", color: "#9a6b3f" },
-  { kind: "vinyl", label: "Vinyl", color: "#b8ab95" },
-  { kind: "concrete", label: "Polished concrete", color: "#8d9196" },
-];
+export const FLOOR_KINDS: { kind: FloorKind; label: string; color: string }[] = FLOOR_MATERIALS.map((m) => ({
+  kind: m.id,
+  label: m.label,
+  color: m.color,
+}));
 
 export const WALL_PAINTS = ["#f1ece2", "#e6dccb", "#d7e3e8", "#e3ead9", "#efe0d9", "#cfd5dc", "#f4f4f2", "#3e4a56"];
 
 /** Default finishes by room type. */
-export function defaultFinish(room: Room): { floor: { kind: FloorKind; color: string }; wall: string } {
-  const floor =
+export function defaultFinish(room: Pick<Room, "kind">): { floor: { kind: FloorKind; color: string }; wall: string } {
+  const id: FloorKind =
     room.kind === "bath" || room.kind === "kitchen"
-      ? FLOOR_KINDS[0]
+      ? "tile"
       : room.kind === "bedroom"
-        ? FLOOR_KINDS[1]
+        ? "wood"
         : room.kind === "living"
-          ? FLOOR_KINDS[2]
-          : FLOOR_KINDS[3];
-  return { floor: { kind: floor.kind, color: floor.color }, wall: room.kind === "bath" ? "#d7e3e8" : "#f1ece2" };
+          ? "vinyl"
+          : "concrete";
+  const m = FLOOR_MATERIALS.find((f) => f.id === id)!;
+  return { floor: { kind: id, color: m.color }, wall: room.kind === "bath" ? "#d7e3e8" : "#f1ece2" };
 }
 
 export const footprint = (f: Pick<Furniture, "w" | "d" | "rot">) =>
@@ -217,11 +244,35 @@ export function fitInside(f: Furniture, room: Room | undefined): Furniture {
   // Outdoors, or too big for the room it was dropped on (a car on a bedroom): leave it where it was put.
   if (!room || fp.w > room.w + 1e-9 || fp.d > room.d + 1e-9) return { ...f, roomId: "", x: r3(f.x), z: r3(f.z) };
   const along = (v: number, lo: number, size: number, span: number) => clamp(v, lo + size / 2, lo + span - size / 2);
+  if (FURNITURE[f.type]?.wallMount) return snapToWall(f, room);
   return {
     ...f,
     roomId: room.id,
     x: r3(along(f.x, room.x, fp.w, room.w)),
     z: r3(along(f.z, room.z, fp.d, room.d)),
+  };
+}
+
+/** Put a door or window on the nearest wall line of the room, its width running along the wall. */
+function snapToWall(f: Furniture, room: Room): Furniture {
+  const walls = [
+    { dist: f.z - room.z, rot: 0, z: room.z, alongX: true },
+    { dist: room.z + room.d - f.z, rot: 0, z: room.z + room.d, alongX: true },
+    { dist: f.x - room.x, rot: 90, x: room.x, alongX: false },
+    { dist: room.x + room.w - f.x, rot: 90, x: room.x + room.w, alongX: false },
+  ];
+  const best = walls.reduce((a, b) => (b.dist < a.dist ? b : a));
+  const span = best.alongX ? room.w : room.d;
+  const lo = best.alongX ? room.x : room.z;
+  const w = Math.min(f.w, span);
+  const along = clamp(best.alongX ? f.x : f.z, lo + w / 2, lo + span - w / 2);
+  return {
+    ...f,
+    roomId: room.id,
+    w,
+    rot: best.rot as Furniture["rot"],
+    x: r3(best.alongX ? along : best.x!),
+    z: r3(best.alongX ? best.z! : along),
   };
 }
 
@@ -295,6 +346,14 @@ export function duplicateFurniture(doc: EditorDoc, id: string): Result {
 }
 
 export function setFinish(doc: EditorDoc, roomId: string, patch: Pick<Partial<Room>, "floor" | "wall">): EditorDoc {
+  return { ...doc, rooms: doc.rooms.map((r) => (r.id === roomId ? { ...r, ...patch } : r)) };
+}
+
+export function setRoomMaterials(
+  doc: EditorDoc,
+  roomId: string,
+  patch: Pick<Partial<Room>, "wallMat" | "ceilingMat">,
+): EditorDoc {
   return { ...doc, rooms: doc.rooms.map((r) => (r.id === roomId ? { ...r, ...patch } : r)) };
 }
 
