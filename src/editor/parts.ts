@@ -86,7 +86,15 @@ export interface EditorPart {
   height?: number;
 }
 
+export interface Draft {
+  entities: import("@/cad/geometry").Entity[];
+  layers: import("@/cad/geometry").Layer[];
+  current: string;
+}
+
 export interface EditorDoc {
+  /** AutoCAD-style drafting layer: lines, polylines, walls, text, dimensions. */
+  draft?: Draft;
   rooms: Room[];
   parts: EditorPart[];
   feederRunM: number;

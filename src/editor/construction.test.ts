@@ -96,3 +96,20 @@ describe("doors and windows snap into walls", () => {
     expect(f.x + f.w / 2).toBeLessThanOrEqual(4 + 1e-9);
   });
 });
+
+describe("drafted walls", () => {
+  it("adds WALL entities to the estimate by material", () => {
+    const d: EditorDoc = {
+      rooms: [],
+      parts: [],
+      feederRunM: 10,
+      draft: {
+        current: "0",
+        layers: [],
+        entities: [{ id: "w1", layer: "A-WALL", kind: "wall", a: [0, 0], b: [5, 0], t: 0.15, mat: "chb150" }],
+      },
+    };
+    const w = estimate(d).walls.find((x) => x.material === "chb150")!;
+    expect(w.areaM2).toBeCloseTo(5 * 2.7, 6);
+  });
+});

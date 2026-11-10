@@ -194,6 +194,14 @@ export function estimate(doc: EditorDoc): Estimate {
     const cur = wallAgg.get(m.id) ?? { area: 0, run: 0 };
     wallAgg.set(m.id, { area: cur.area + area, run: cur.run + run });
   }
+  // Walls drawn line by line with the WALL command.
+  for (const e of doc.draft?.entities ?? []) {
+    if (e.kind !== "wall") continue;
+    const run = Math.hypot(e.b[0] - e.a[0], e.b[1] - e.a[1]);
+    const id = WALL_MATERIALS.some((m) => m.id === e.mat) ? e.mat : "chb100";
+    const cur = wallAgg.get(id) ?? { area: 0, run: 0 };
+    wallAgg.set(id, { area: cur.area + run * h, run: cur.run + run });
+  }
   const walls = [...wallAgg].map(([id, { area, run }]) => {
     const m = WALL_MATERIALS.find((x) => x.id === id)!;
     return { material: id, label: m.label, areaM2: c2(area), items: m.qty(area, run, h) };

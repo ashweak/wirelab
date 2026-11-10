@@ -8,6 +8,9 @@ import type { Schedule } from "@/engine/types";
 import { colorFor } from "./colors";
 import type { Corner } from "./HouseScene";
 import type { SceneCircuit, SceneDevice } from "./sceneData";
+import { DraftLayer } from "./DraftLayer";
+import { DEFAULT_LAYERS, type Entity, type Pt, type SnapKind } from "@/cad/geometry";
+import type { Draft } from "@/editor/parts";
 
 export interface PlanApi {
   fit: () => void;
@@ -40,6 +43,20 @@ interface Props {
   onFloorUp: (x: number, z: number) => void;
   onDragMove: (x: number, z: number) => void;
   onDragEnd: () => void;
+  /** AutoCAD-style drafting overlay. When active, clicks go to the command engine. */
+  cad?: {
+    active: boolean;
+    draft: Draft;
+    selection: string[];
+    preview: Entity[];
+    cursor: { pt: Pt; snap: SnapKind | null } | null;
+    last: Pt | null;
+    onHover: (raw: Pt, k: number) => void;
+    onClick: (raw: Pt, k: number, shift: boolean) => void;
+    onWindow: (a: Pt, b: Pt, crossing: boolean, shift: boolean) => void;
+  };
+  /** Static render for printing: fixed view, no interaction. */
+  print?: { k: number; ox: number; oy: number; w: number; h: number; sheet: string; scale: string; date: string };
 }
 
 const INK = "#1f2933";
@@ -55,8 +72,12 @@ function niceLength(target: number) {
 
 export default function PlanView(p: Props) {
   const wrap = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ w: 800, h: 600 });
-  const [view, setView] = useState({ k: 50, ox: 120, oy: 90 });
+  const [sizeState, setSize] = useState({ w: 800, h: 600 });
+  const [viewState, setView] = useState({ k: 50, ox: 120, oy: 90 });
+  const size = p.print ? { w: p.print.w, h: p.print.h } : sizeState;
+  const view = p.print ? { k: p.print.k, ox: p.print.ox, oy: p.print.oy } : viewState;
+  const box = useRef<{ a: Pt; sx: number; sy: number; shift: boolean } | null>(null);
+  const [boxDraw, setBoxDraw] = useState<{ a: Pt; b: Pt } | null>(null);
   const pan = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean } | null>(null);
   const props = useRef(p);
   useEffect(() => {
@@ -74,7 +95,8 @@ export default function PlanView(p: Props) {
 
   // Track the container size.
   useEffect(() => {
-    const el = wrap.current!;
+    const el = wrap.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
     ro.observe(el);
     return () => ro.disconnect();
@@ -115,8 +137,8 @@ export default function PlanView(p: Props) {
       };
   }, [p.apiRef, fit]);
   useEffect(() => {
-    fit();
-  }, [fit, p.mode]);
+    if (!p.print) fit();
+  }, [fit, p.mode, p.print]);
 
   // Pointer tracking for drags, pans, hover and placement.
   useEffect(() => {
@@ -133,8 +155,15 @@ export default function PlanView(p: Props) {
         setView((cur) => ({ ...cur, ox: pan.current!.ox + dx, oy: pan.current!.oy + dy }));
         return;
       }
+      if (box.current) {
+        setBoxDraw({ a: box.current.a, b: world });
+        return;
+      }
       if (props.current.dragging) props.current.onDragMove(world[0], world[1]);
-      else if (e.target instanceof Node && el.contains(e.target)) props.current.onFloorMove(world[0], world[1]);
+      else if (e.target instanceof Node && el.contains(e.target)) {
+        props.current.onFloorMove(world[0], world[1]);
+        props.current.cad?.onHover(world, v.k);
+      }
     };
     const up = (e: PointerEvent) => {
       const v = viewRef.current;
@@ -144,6 +173,15 @@ export default function PlanView(p: Props) {
       const world: [number, number] = [(e.clientX - r.left - v.ox) / v.k, (e.clientY - r.top - v.oy) / v.k];
       const wasPan = pan.current;
       pan.current = null;
+      const b = box.current;
+      if (b) {
+        box.current = null;
+        setBoxDraw(null);
+        const moved = Math.abs(e.clientX - b.sx) + Math.abs(e.clientY - b.sy) > 5;
+        if (moved) props.current.cad?.onWindow(b.a, world, world[0] < b.a[0], b.shift);
+        else props.current.cad?.onClick(world, v.k, b.shift);
+        return;
+      }
       if (props.current.dragging) {
         props.current.onDragEnd();
         props.current.onFloorUp(world[0], world[1]);
@@ -172,6 +210,10 @@ export default function PlanView(p: Props) {
   };
 
   const onBackgroundDown = (e: React.PointerEvent) => {
+    if (p.cad?.active && e.button === 0) {
+      box.current = { a: toWorld(e.clientX, e.clientY), sx: e.clientX, sy: e.clientY, shift: e.shiftKey };
+      return;
+    }
     if (e.button === 1 || (e.button === 0 && p.panOnEmpty)) {
       pan.current = { x: e.clientX, y: e.clientY, ox: view.ox, oy: view.oy, moved: false };
       return;
@@ -439,7 +481,7 @@ export default function PlanView(p: Props) {
       <g
         key={key}
         transform={`translate(${X(dv.position[0])} ${Y(dv.position[2])})`}
-        onPointerDown={clickable ? down(p.onPartDown, dv.id) : undefined}
+        onPointerDown={clickable && !p.cad?.active && !p.print ? down(p.onPartDown, dv.id) : undefined}
         style={{ cursor: clickable ? "move" : undefined }}
       >
         {selected && <circle r={s * 1.9} fill="none" stroke={AMBER} strokeWidth={1.5} strokeDasharray="3 2" />}
@@ -491,7 +533,15 @@ export default function PlanView(p: Props) {
 
   return (
     <div ref={wrap} className="relative h-full w-full select-none overflow-hidden" style={{ background: "#e9e7e1" }} onWheel={onWheel}>
-      <svg width={size.w} height={size.h} className="block" onPointerDown={onBackgroundDown} onContextMenu={(e) => e.preventDefault()}>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width={size.w}
+        height={size.h}
+        className="block"
+        onPointerDown={p.print ? undefined : onBackgroundDown}
+        onContextMenu={(e) => e.preventDefault()}
+        style={{ cursor: p.cad?.active ? "none" : undefined }}
+      >
         <defs>
           <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
             <rect width="6" height="6" fill="#d9d5cc" />
@@ -533,8 +583,8 @@ export default function PlanView(p: Props) {
               fill={circuitMode ? "#ffffff" : `${fin.color}55`}
               stroke={selected ? AMBER : "none"}
               strokeWidth={selected ? 2 : 0}
-              onPointerDown={down(p.onRoomDown, r.id)}
-              style={{ cursor: "move" }}
+              onPointerDown={p.cad?.active || p.print ? undefined : down(p.onRoomDown, r.id)}
+              style={{ cursor: p.cad?.active ? "none" : "move" }}
             />
           );
         })}
@@ -570,14 +620,26 @@ export default function PlanView(p: Props) {
           </g>
         )}
 
-        {furniture}
+        <g pointerEvents={p.cad?.active ? "none" : undefined}>{furniture}</g>
         {wiring}
+        {(p.cad || p.doc.draft) && (
+          <DraftLayer
+            entities={p.doc.draft?.entities ?? []}
+            layers={p.doc.draft?.layers ?? DEFAULT_LAYERS}
+            selection={p.cad?.selection ?? []}
+            previewEnts={p.cad?.preview ?? []}
+            cursor={p.cad?.active ? p.cad.cursor : null}
+            last={p.cad?.active ? p.cad.last : null}
+            window={boxDraw}
+            v={{ X, Y, k }}
+          />
+        )}
 
         {/* electrical symbols */}
         {p.panel && (
           <g
             transform={`translate(${X(p.panel.position[0])} ${Y(p.panel.position[2])})`}
-            onPointerDown={down(p.onPartDown, p.panel.id)}
+            onPointerDown={p.cad?.active || p.print ? undefined : down(p.onPartDown, p.panel.id)}
             style={{ cursor: "move" }}
           >
             {sel?.kind === "part" && sel.id === p.panel.id && <circle r={18} fill="none" stroke={AMBER} strokeDasharray="3 2" strokeWidth={1.5} />}

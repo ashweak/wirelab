@@ -53,7 +53,7 @@ import {
   setFurnitureColor,
   setRoomMaterials,
 } from "@/editor/interior";
-import { PART_TYPES, type FloorKind, type FurnitureType } from "@/editor/parts";
+import { PART_TYPES, type Draft, type FloorKind, type FurnitureType } from "@/editor/parts";
 import { ChecksView, EstimateView, H2, MaterialsTable, ScheduleTable } from "./ScheduleView";
 import { CEILING_MATERIALS, WALL_MATERIALS, WALL_OF, estimate } from "@/editor/construction";
 import type { Corner, SceneApi, ViewMode, ViewName } from "./HouseScene";
@@ -61,10 +61,23 @@ import { deviceFor, sceneCircuits } from "./sceneData";
 import { ViewToggle } from "./ViewToggle";
 import PlanView, { type PlanApi } from "./PlanView";
 import ErrorBoundary from "./ErrorBoundary";
+import {
+  DEFAULT_LAYERS,
+  area as cadArea,
+  findSnap,
+  hitTest,
+  length as cadLength,
+  ortho as cadOrtho,
+  selectInRect,
+  snapCandidates,
+  type Pt,
+  type SnapKind,
+} from "@/cad/geometry";
+import { initial, preview as cadPreviewOf, run as cadRun, type CadCtx, type CadResult, type CadState } from "@/cad/commands";
 
 const HouseScene = dynamic(() => import("./HouseScene"), { ssr: false });
 
-type Tool = "select" | "room" | "wire" | "measure" | `place:${EditorPartType}` | `preset:${string}` | `furn:${FurnitureType}`;
+type Tool = "select" | "room" | "wire" | "measure" | "draft" | `place:${EditorPartType}` | `preset:${string}` | `furn:${FurnitureType}`;
 type Selection = { kind: "room" | "part" | "furniture"; id: string } | null;
 type Drag =
   | { kind: "room"; id: string; start: [number, number]; origin: EditorDoc; moved: boolean }
@@ -103,6 +116,7 @@ const HINT: Record<string, string> = {
   preset: "Click on the grid to drop the room. Esc to stop.",
   furn: "Click to place. Doors and windows snap onto the nearest wall. R rotates, Esc to stop.",
   measure: "Click a start point, then an end point. The distance shows on screen. Esc clears.",
+  draft: "Drafting: type a command (L, PL, W, REC, C, A, T, DLI, M, CO, RO, MI, SC, O, E, DI, HELP). Drag left→right = window, right→left = crossing. F3 OSNAP · F8 ORTHO · F9 SNAP.",
 };
 
 /** Drop anything an older or hand-edited file has that this version doesn't know. */
@@ -197,7 +211,7 @@ function Group({
 
 export default function Editor() {
   const [doc, setDocState] = useState<EditorDoc>(EMPTY);
-  const [draft, setDraft] = useState<EditorDoc | null>(null);
+  const [dragDoc, setDragDoc] = useState<EditorDoc | null>(null);
   const [past, setPast] = useState<EditorDoc[]>([]);
   const [future, setFuture] = useState<EditorDoc[]>([]);
   const [tool, setTool] = useState<Tool>("select");
@@ -214,6 +228,16 @@ export default function Editor() {
   const [viewKind, setViewKind] = useState<"3d" | "floor" | "circuit">("3d");
   const [measure, setMeasure] = useState<{ a: [number, number]; b: [number, number]; live: boolean } | null>(null);
   const planApi = useRef<PlanApi | null>(null);
+  const [cad, setCad] = useState<CadState>(initial());
+  const [cadSel, setCadSel] = useState<string[]>([]);
+  const [cadLog, setCadLog] = useState<string[]>([
+    "WireLab drafting. Type a command and press Enter or Space — L, PL, W, REC, C, A, T, DLI, DI, M, CO, RO, MI, SC, O, E — or HELP.",
+  ]);
+  const [cadCursor, setCadCursor] = useState<{ raw: Pt; pt: Pt; snap: SnapKind | null } | null>(null);
+  const [toggles, setToggles] = useState({ osnap: true, ortho: false, snap: false });
+  const [wallMat, setWallMat] = useState("chb100");
+  const [cmdText, setCmdText] = useState("");
+  const cmdRef = useRef<HTMLInputElement>(null);
   const [lighting, setLighting] = useState<"day" | "night">("day");
   const [cutaway, setCutaway] = useState(true);
   const [showWiring, setShowWiring] = useState(false);
@@ -247,7 +271,7 @@ export default function Editor() {
     }
   }, [doc]);
 
-  const shown = draft ?? doc;
+  const shown = dragDoc ?? doc;
   const say = useCallback((text: string, bad = false) => setMessage({ text, bad }), []);
   const commit = useCallback(
     (next: EditorDoc, from: EditorDoc = doc) => {
@@ -288,6 +312,40 @@ export default function Editor() {
     [shown.parts],
   );
   const ceiling = ceilingOf(shown);
+  const draft: Draft = shown.draft ?? { entities: [], layers: DEFAULT_LAYERS, current: "0" };
+  const cadActive = viewKind !== "3d" && (tool === "draft" || cad.cmd !== null);
+  const blocked = new Set(draft.layers.filter((l) => l.locked || !l.on).map((l) => l.name));
+  const pickable = draft.entities.filter((e) => !blocked.has(e.layer));
+  const snapCands = useMemo(() => {
+    const visible = draft.entities.filter((e) => draft.layers.find((l) => l.name === e.layer)?.on !== false);
+    const roomPts = shown.rooms.flatMap((r) => [
+      { pt: [r.x, r.z] as Pt, kind: "endpoint" as const },
+      { pt: [r.x + r.w, r.z] as Pt, kind: "endpoint" as const },
+      { pt: [r.x, r.z + r.d] as Pt, kind: "endpoint" as const },
+      { pt: [r.x + r.w, r.z + r.d] as Pt, kind: "endpoint" as const },
+      { pt: [r.x + r.w / 2, r.z] as Pt, kind: "midpoint" as const },
+      { pt: [r.x + r.w / 2, r.z + r.d] as Pt, kind: "midpoint" as const },
+      { pt: [r.x, r.z + r.d / 2] as Pt, kind: "midpoint" as const },
+      { pt: [r.x + r.w, r.z + r.d / 2] as Pt, kind: "midpoint" as const },
+    ]);
+    return [...snapCandidates(visible), ...roomPts];
+  }, [draft.entities, draft.layers, shown.rooms]);
+  const cadCtx = (): CadCtx => {
+    const m = WALL_MATERIALS.find((x) => x.id === wallMat) ?? WALL_MATERIALS[0];
+    return {
+      entities: draft.entities,
+      selection: cadSel,
+      layer: draft.current,
+      wall: { t: m.thickness, mat: m.id },
+      textHeight: 0.25,
+      cursor: cadCursor?.pt ?? null,
+    };
+  };
+  const cadPreview = useMemo(
+    () => (cadActive ? cadPreviewOf(cad, cadCursor?.pt ?? null, cadCtx()) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cad, cadCursor, cadActive, draft.entities, wallMat],
+  );
   const circuits = useMemo(
     () =>
       built.ok && panel ? sceneCircuits(panel.position, built.project.circuits, shown.rooms, tags, ceiling) : [],
@@ -449,13 +507,13 @@ export default function Editor() {
       });
     }
     if (r.ok) {
-      setDraft(r.doc);
+      setDragDoc(r.doc);
       if (!drag.moved) setDrag({ ...drag, moved: true });
     }
   };
   const onDragEnd = () => {
-    if (drag && drag.kind !== "draw" && draft && drag.moved) {
-      commit(draft, drag.origin);
+    if (drag && drag.kind !== "draw" && dragDoc && drag.moved) {
+      commit(dragDoc, drag.origin);
       const what = drag.kind === "resize" ? "Resized" : "Moved";
       say(
         `${what} ${
@@ -467,9 +525,63 @@ export default function Editor() {
         }`,
       );
     }
-    setDraft(null);
+    setDragDoc(null);
     if (drag?.kind !== "draw") setDrag(null);
   };
+
+  // ----- drafting (AutoCAD-style) -----
+  const log = (...lines: string[]) => setCadLog((l) => [...l, ...lines].slice(-60));
+  const resolve = (raw: Pt, k: number) => {
+    const last = cad.pts.at(-1) ?? null;
+    if (toggles.osnap) {
+      const hit = findSnap(raw, [], 12 / k, snapCands);
+      if (hit) return { raw, pt: hit.pt, snap: hit.kind };
+    }
+    let pt = raw;
+    if (toggles.snap) pt = [snap(pt[0], step), snap(pt[1], step)];
+    if (toggles.ortho && last && cad.cmd) pt = cadOrtho(last, pt);
+    return { raw, pt, snap: null };
+  };
+  const applyCad = (r: CadResult) => {
+    if (r.add || r.remove || r.replace) {
+      const gone = new Set(r.remove ?? []);
+      const repl = new Map((r.replace ?? []).map((e) => [e.id, e]));
+      const entities = [...draft.entities.filter((e) => !gone.has(e.id)).map((e) => repl.get(e.id) ?? e), ...(r.add ?? [])];
+      commit({ ...doc, draft: { ...draft, entities } });
+      if (r.remove) setCadSel((sel) => sel.filter((id) => !gone.has(id)));
+    }
+    if (r.message) log(...r.message.split("\n"));
+    if (!r.state.cmd && cad.cmd) setCadSel([]);
+    setCad(r.state);
+  };
+  const cadText = (raw: string) => {
+    const t = raw.trim();
+    const up = t.toUpperCase();
+    log(`${cad.prompt} ${t}`);
+    if (!cad.cmd) {
+      if (up === "U" || up === "UNDO") return undo();
+      if (up === "REDO") return redo();
+      if (up === "Z" || up === "ZOOM" || up === "ZE") return planApi.current?.fit();
+      if (up === "OSNAP" || up === "OS") return setToggles((x) => ({ ...x, osnap: !x.osnap }));
+      if (up === "ORTHO") return setToggles((x) => ({ ...x, ortho: !x.ortho }));
+      if (up === "SNAP" || up === "SN") return setToggles((x) => ({ ...x, snap: !x.snap }));
+      if (up === "LA" || up === "LAYER") return say("Layers are in the panel on the right");
+    }
+    applyCad(t === "" ? cadRun(cad, { enter: true }, cadCtx()) : cadRun(cad, { text: raw }, cadCtx()));
+  };
+  const onCadHover = (raw: Pt, k: number) => setCadCursor(resolve(raw, k));
+  const onCadClick = (raw: Pt, k: number, shift: boolean) => {
+    const c = resolve(raw, k);
+    if (cad.cmd && cad.step !== -1) return applyCad(cadRun(cad, { point: c.pt }, cadCtx()));
+    const hit = pickable.find((e) => hitTest(e, raw, 6 / k));
+    if (hit) setCadSel((sel) => (shift ? sel.filter((id) => id !== hit.id) : sel.includes(hit.id) ? sel : [...sel, hit.id]));
+    else if (!shift && !cad.cmd) setCadSel([]);
+  };
+  const onCadWindow = (a: Pt, b: Pt, crossing: boolean, shift: boolean) => {
+    const ids = selectInRect(pickable, a, b, crossing);
+    setCadSel((sel) => (shift ? sel.filter((id) => !ids.includes(id)) : [...new Set([...sel, ...ids])]));
+  };
+  const setDraft = (patch: Partial<Draft>) => commit({ ...doc, draft: { ...draft, ...patch } });
 
   // ----- actions on the selection -----
   const del = useCallback(() => {
@@ -529,9 +641,35 @@ export default function Editor() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
-      if (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA") return;
       const mod = e.ctrlKey || e.metaKey;
       const k = e.key.toLowerCase();
+      if (viewKind !== "3d" && ["F3", "F8", "F9"].includes(e.key)) {
+        e.preventDefault();
+        const key = { F3: "osnap", F8: "ortho", F9: "snap" }[e.key as "F3"] as "osnap";
+        setToggles((x) => ({ ...x, [key]: !x[key] }));
+        return;
+      }
+      if (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA") return;
+      if (viewKind !== "3d" && (tool === "draft" || cad.cmd)) {
+        if (e.key === "Escape") {
+          setCad(initial());
+          setCadSel([]);
+          log("*Cancel*");
+          return;
+        }
+        if ((e.key === "Delete" || e.key === "Backspace") && cadSel.length) {
+          e.preventDefault();
+          applyCad(cadRun(initial(), { text: "E" }, cadCtx()));
+          return;
+        }
+        if (!mod && (e.key.length === 1 || e.key === "Enter")) {
+          e.preventDefault();
+          cmdRef.current?.focus();
+          if (e.key === "Enter" || e.key === " ") cadText("");
+          else setCmdText((x) => x + e.key);
+          return;
+        }
+      }
       if (mod && k === "z" && !e.shiftKey) {
         e.preventDefault();
         undo();
@@ -559,7 +697,8 @@ export default function Editor() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, duplicate, del, rotate, nudge, selection, clipboard]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [undo, redo, duplicate, del, rotate, nudge, selection, clipboard, viewKind, tool, cad, cadSel, draft]);
 
   // ----- drag & drop from the library -----
   const onDrop = (e: React.DragEvent) => {
@@ -743,11 +882,23 @@ export default function Editor() {
             onFloorUp={onFloorUp}
             onDragMove={onDragMove}
             onDragEnd={onDragEnd}
+            cad={{
+              active: cadActive,
+              draft,
+              selection: cadSel,
+              preview: cadPreview,
+              cursor: cadCursor,
+              last: cad.cmd ? (cad.pts.at(-1) ?? null) : null,
+              onHover: onCadHover,
+              onClick: onCadClick,
+              onWindow: onCadWindow,
+            }}
           />
         ) : (
         <ErrorBoundary label="The 3D view" onReset={() => setViewKind("3d")}>
         <HouseScene
           measure={measure}
+          draft={draft.entities.filter((e) => draft.layers.find((l) => l.name === e.layer)?.on !== false)}
           rooms={shown.rooms}
           panel={panel}
           circuits={circuits}
@@ -795,9 +946,17 @@ export default function Editor() {
               ["room", "▭ Draw room"],
               ["wire", "〰 Wire"],
               ["measure", "📏 Measure"],
+              ["draft", "✏ Draft"],
             ] as const
           ).map(([t, label]) => (
-            <button key={t} onClick={() => setTool(t)} className={`${btn(tool === t)} bg-slate-900/90`}>
+            <button
+              key={t}
+              onClick={() => {
+                setTool(t);
+                if (t === "draft" && viewKind === "3d") setViewKind("floor");
+              }}
+              className={`${btn(tool === t)} bg-slate-900/90`}
+            >
               {label}
             </button>
           ))}
@@ -897,7 +1056,7 @@ export default function Editor() {
         )}
 
         {/* Shape library */}
-        <div className="absolute bottom-14 left-3 top-14 flex w-48 flex-col gap-2 overflow-y-auto pr-1">
+        <div className={`absolute bottom-14 left-3 ${viewKind === "3d" ? "top-24" : "top-14"} flex w-48 flex-col gap-2 overflow-y-auto pr-1`}>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -1011,6 +1170,64 @@ export default function Editor() {
           </p>
         </div>
 
+        {viewKind !== "3d" && (
+          <div className="absolute bottom-11 left-56 z-10 w-[min(560px,calc(100%-560px))] flex flex-col overflow-hidden rounded-md border border-slate-700 bg-slate-950/95 font-mono text-[11px] text-slate-300 shadow-lg">
+            <div className="max-h-20 overflow-y-auto px-2 py-1 leading-snug text-slate-400">
+              {cadLog.slice(-6).map((l, i) => (
+                <div key={i} className="whitespace-pre-wrap">
+                  {l}
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 border-t border-slate-800 px-2 py-1">
+              <span className="min-w-0 truncate text-amber-300" title={cad.prompt}>{cad.prompt}</span>
+              <input
+                ref={cmdRef}
+                value={cmdText}
+                onChange={(e) => setCmdText(e.target.value)}
+                onFocus={() => tool !== "draft" && setTool("draft")}
+                onKeyDown={(e) => {
+                  const inText = cad.cmd === "TEXT" && cad.step === 1;
+                  if (e.key === "Enter" || (e.key === " " && !inText)) {
+                    e.preventDefault();
+                    cadText(cmdText);
+                    setCmdText("");
+                  } else if (e.key === "Escape") {
+                    setCad(initial());
+                    setCadSel([]);
+                    setCmdText("");
+                    log("*Cancel*");
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+                placeholder="type a command…"
+                className="min-w-[90px] flex-1 bg-transparent text-slate-100 outline-none placeholder:text-slate-600"
+                aria-label="Command line"
+              />
+              {(
+                [
+                  ["osnap", "OSNAP", "F3"],
+                  ["ortho", "ORTHO", "F8"],
+                  ["snap", "SNAP", "F9"],
+                ] as const
+              ).map(([key, label, fk]) => (
+                <button
+                  key={key}
+                  onClick={() => setToggles((x) => ({ ...x, [key]: !x[key] }))}
+                  className={`rounded px-1.5 py-0.5 text-[10px] ${toggles[key] ? "bg-sky-500/30 text-sky-200" : "text-slate-500"}`}
+                  title={`${label} (${fk})`}
+                >
+                  {label}
+                </button>
+              ))}
+              {cadCursor && (
+                <span className="shrink-0 text-slate-500">
+                  {cadCursor.pt[0].toFixed(2)}, {(0 - cadCursor.pt[1]).toFixed(2)}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
         {viewKind === "3d" && <ViewToggle view={view} setView={setView} />}
         <p
           className={`pointer-events-none absolute bottom-3 left-3 font-mono text-[10px] ${
@@ -1042,6 +1259,116 @@ export default function Editor() {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {viewKind !== "3d" && (
+          <div className="rounded-md border border-sky-400/30 bg-sky-400/5 p-3">
+            <H2>Drafting · layers</H2>
+            <table className="w-full text-[11px]">
+              <tbody>
+                {draft.layers.map((l) => (
+                  <tr key={l.name} className="border-t border-slate-800 first:border-t-0">
+                    <td className="py-1">
+                      <input
+                        type="radio"
+                        name="current-layer"
+                        checked={draft.current === l.name}
+                        onChange={() => setDraft({ current: l.name })}
+                        aria-label={`Make ${l.name} current`}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="color"
+                        value={l.color}
+                        onChange={(e) =>
+                          setDraft({ layers: draft.layers.map((q) => (q.name === l.name ? { ...q, color: e.target.value } : q)) })
+                        }
+                        className="h-4 w-5 cursor-pointer border-0 bg-transparent p-0"
+                        aria-label={`${l.name} colour`}
+                      />
+                    </td>
+                    <td className="font-mono text-slate-200">{l.name}</td>
+                    <td className="text-right font-mono text-slate-500">{draft.entities.filter((e) => e.layer === l.name).length}</td>
+                    <td className="text-right">
+                      <button
+                        onClick={() => setDraft({ layers: draft.layers.map((q) => (q.name === l.name ? { ...q, on: !q.on } : q)) })}
+                        className={l.on ? "text-slate-200" : "text-slate-600"}
+                        title={l.on ? "Turn off" : "Turn on"}
+                      >
+                        {l.on ? "◉" : "○"}
+                      </button>
+                      <button
+                        onClick={() => setDraft({ layers: draft.layers.map((q) => (q.name === l.name ? { ...q, locked: !q.locked } : q)) })}
+                        className={`ml-2 ${l.locked ? "text-amber-300" : "text-slate-600"}`}
+                        title={l.locked ? "Unlock" : "Lock"}
+                      >
+                        {l.locked ? "🔒" : "🔓"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <button
+              onClick={() => {
+                const name = `LAYER-${draft.layers.length}`;
+                setDraft({ layers: [...draft.layers, { name, color: "#475569", on: true, locked: false }], current: name });
+              }}
+              className={`${btn(false)} mt-2`}
+            >
+              ＋ New layer
+            </button>
+            <label className="mt-3 flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-slate-500">
+              Wall system for the WALL command
+              <select
+                value={wallMat}
+                onChange={(e) => setWallMat(e.target.value)}
+                className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs normal-case tracking-normal text-slate-200"
+              >
+                {WALL_MATERIALS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label} · {Math.round(m.thickness * 1000)} mm
+                  </option>
+                ))}
+              </select>
+            </label>
+            {cadSel.length > 0 && (
+              <div className="mt-3 rounded border border-amber-400/40 p-2 text-[11px]">
+                <p className="font-semibold text-amber-300">
+                  {cadSel.length} drafted object{cadSel.length > 1 ? "s" : ""} selected
+                </p>
+                <p className="font-mono text-slate-400">
+                  Length {draft.entities.filter((e) => cadSel.includes(e.id)).reduce((sum, e) => sum + cadLength(e), 0).toFixed(3)} m
+                  {cadSel.length === 1 &&
+                    cadArea(draft.entities.find((e) => e.id === cadSel[0])!) > 0 &&
+                    ` · Area ${cadArea(draft.entities.find((e) => e.id === cadSel[0])!).toFixed(3)} m²`}
+                </p>
+                <label className="mt-1 flex items-center gap-2 text-slate-400">
+                  Layer
+                  <select
+                    onChange={(e) =>
+                      setDraft({
+                        entities: draft.entities.map((x) => (cadSel.includes(x.id) ? { ...x, layer: e.target.value } : x)),
+                      })
+                    }
+                    value=""
+                    className="rounded border border-slate-700 bg-slate-900 px-1 py-0.5 text-slate-200"
+                  >
+                    <option value="" disabled>
+                      move to…
+                    </option>
+                    {draft.layers.map((l) => (
+                      <option key={l.name} value={l.name}>
+                        {l.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="mt-1 text-slate-500">Type M, CO, RO, MI, SC or E to edit them, or press Delete.</p>
+              </div>
+            )}
           </div>
         )}
 

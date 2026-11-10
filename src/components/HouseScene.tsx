@@ -7,7 +7,8 @@ import { BoxGeometry as BoxGeometryImpl, CanvasTexture, Plane, Raycaster, SRGBCo
 import type { OrbitControls as OrbitImpl } from "three-stdlib";
 import { CEILING } from "@/data/goldenHouse";
 import { defaultFinish, FURNITURE } from "@/editor/interior";
-import { WALL_OF, roomSides } from "@/editor/construction";
+import { WALL_MATERIALS, WALL_OF, roomSides } from "@/editor/construction";
+import type { Entity } from "@/cad/geometry";
 import { PART_INFO, type FloorKind, type Furniture, type Room } from "@/editor/parts";
 import { Environment, Lightformer } from "@react-three/drei";
 import { floorTexture } from "./textures";
@@ -68,6 +69,8 @@ interface Props {
   showWiring?: boolean;
   cutaway?: boolean;
   measure?: { a: [number, number]; b: [number, number] } | null;
+  /** Drafted entities (visible layers only). Walls are extruded; other lines lie on the floor. */
+  draft?: Entity[];
 }
 
 const PVC = "#e8792b";
@@ -690,6 +693,7 @@ export default function HouseScene({
   showWiring = true,
   cutaway = false,
   measure = null,
+  draft = [],
 }: Props) {
   const render = mode === "render";
   const night = render && lighting === "night";
@@ -860,6 +864,49 @@ export default function HouseScene({
         </group>
       )}
 
+      {draft.map((e) => {
+        if (e.kind === "wall") {
+          const len = Math.hypot(e.b[0] - e.a[0], e.b[1] - e.a[1]);
+          if (len < 1e-6) return null;
+          const ang = Math.atan2(e.b[1] - e.a[1], e.b[0] - e.a[0]);
+          const mat = WALL_MATERIALS.find((m) => m.id === e.mat);
+          return (
+            <mesh
+              key={e.id}
+              position={[(e.a[0] + e.b[0]) / 2, wallH / 2, (e.a[1] + e.b[1]) / 2]}
+              rotation={[0, -ang, 0]}
+              castShadow={render}
+              receiveShadow={render}
+              raycast={() => null}
+            >
+              <boxGeometry args={[len + e.t, wallH, e.t]} />
+              {render ? (
+                <meshStandardMaterial key="solid" color={mat?.color ?? "#d8d1c2"} roughness={0.9} />
+              ) : (
+                <meshStandardMaterial key="ghost" color={mat?.color ?? "#d8d1c2"} transparent opacity={0.35} depthWrite={false} />
+              )}
+            </mesh>
+          );
+        }
+        if (render) return null;
+        const pts: [number, number, number][] =
+          e.kind === "line" || e.kind === "dim"
+            ? [
+                [e.a[0], 0.02, e.a[1]],
+                [e.b[0], 0.02, e.b[1]],
+              ]
+            : e.kind === "pline"
+              ? [...e.pts, ...(e.closed ? [e.pts[0]] : [])].map((q) => [q[0], 0.02, q[1]] as [number, number, number])
+              : e.kind === "circle" || e.kind === "arc"
+                ? Array.from({ length: 49 }, (_, i) => {
+                    const a0 = e.kind === "arc" ? e.a0 : 0;
+                    const span = e.kind === "arc" ? ((((e.a1 - e.a0) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) || 2 * Math.PI) : 2 * Math.PI;
+                    const a = a0 + (span * i) / 48;
+                    return [e.c[0] + e.r * Math.cos(a), 0.02, e.c[1] - e.r * Math.sin(a)] as [number, number, number];
+                  })
+                : [];
+        return pts.length > 1 ? <Line key={e.id} points={pts} color="#38bdf8" lineWidth={1.2} /> : null;
+      })}
       {measure && (
         <group>
           <Line
