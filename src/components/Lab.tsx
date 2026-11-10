@@ -9,6 +9,7 @@ import { DEMO_APPLIANCES, SCENARIOS } from "@/data/scenarios";
 import { colorFor } from "./colors";
 import { ChecksView, H2, ScheduleTable } from "./ScheduleView";
 import Editor from "./Editor";
+import ErrorBoundary from "./ErrorBoundary";
 import { sceneCircuits } from "./sceneData";
 import { ViewToggle } from "./ViewToggle";
 import type { ViewMode } from "./HouseScene";
@@ -57,6 +58,7 @@ function Demo() {
   return (
     <main className="grid flex-1 lg:grid-cols-[1fr_460px]">
       <section className="relative h-[55vh] border-b border-slate-800 lg:h-auto lg:border-b-0 lg:border-r">
+        <ErrorBoundary label="The 3D view">
         <HouseScene
           rooms={[...ROOMS]}
           panel={{ id: "panel", position: PANEL_POSITION, facing: Math.PI / 2 }}
@@ -66,6 +68,7 @@ function Demo() {
           focus={focus}
           view={view}
         />
+        </ErrorBoundary>
         <ViewToggle view={view} setView={setView} />
         <div className="pointer-events-none absolute left-3 top-3 flex flex-wrap gap-1.5">
           {schedule.circuits.map((c) => (

@@ -60,6 +60,7 @@ import type { Corner, SceneApi, ViewMode, ViewName } from "./HouseScene";
 import { deviceFor, sceneCircuits } from "./sceneData";
 import { ViewToggle } from "./ViewToggle";
 import PlanView, { type PlanApi } from "./PlanView";
+import ErrorBoundary from "./ErrorBoundary";
 
 const HouseScene = dynamic(() => import("./HouseScene"), { ssr: false });
 
@@ -104,10 +105,21 @@ const HINT: Record<string, string> = {
   measure: "Click a start point, then an end point. The distance shows on screen. Esc clears.",
 };
 
+/** Drop anything an older or hand-edited file has that this version doesn't know. */
+function sanitize(d: Partial<EditorDoc>): EditorDoc {
+  return {
+    ...d,
+    feederRunM: typeof d.feederRunM === "number" ? d.feederRunM : 10,
+    rooms: Array.isArray(d.rooms) ? d.rooms.filter((r) => r && typeof r.x === "number" && r.w > 0 && r.d > 0) : [],
+    parts: Array.isArray(d.parts) ? d.parts.filter((p) => p && PART_INFO[p.type] && Array.isArray(p.position)) : [],
+    furniture: Array.isArray(d.furniture) ? d.furniture.filter((f) => f && FURNITURE[f.type]) : [],
+  } as EditorDoc;
+}
+
 function load(): EditorDoc {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as EditorDoc) : EMPTY;
+    return raw ? sanitize(JSON.parse(raw)) : EMPTY;
   } catch {
     return EMPTY;
   }
@@ -591,7 +603,7 @@ export default function Editor() {
     try {
       const d = JSON.parse(await file.text()) as EditorDoc;
       if (!Array.isArray(d.rooms) || !Array.isArray(d.parts)) throw new Error();
-      commit({ ...d, feederRunM: d.feederRunM ?? 10 });
+      commit(sanitize(d));
       setSelection(null);
       say(`Loaded ${file.name}`);
     } catch {
@@ -733,6 +745,7 @@ export default function Editor() {
             onDragEnd={onDragEnd}
           />
         ) : (
+        <ErrorBoundary label="The 3D view" onReset={() => setViewKind("3d")}>
         <HouseScene
           measure={measure}
           rooms={shown.rooms}
@@ -768,6 +781,7 @@ export default function Editor() {
             apiRef: api,
           }}
         />
+        </ErrorBoundary>
         )}
         {viewKind === "3d" && selectionBar && (
           <div className="absolute left-1/2 top-24 z-20 -translate-x-1/2">{selectionBar}</div>
