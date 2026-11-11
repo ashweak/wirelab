@@ -13,6 +13,7 @@ import {
   type EditorPartType,
   type Room,
   type RoomKind,
+  routeCeiling,
   type V3,
 } from "./parts";
 import { PANEL_KEY, chainOrder, chainSegments, segLength } from "./wiring";
@@ -114,7 +115,7 @@ export function addPart(doc: EditorDoc, type: EditorPartType, x: number, z: numb
     id: uid(),
     type,
     roomId: room.id,
-    position: snapPart(type, room, x, z, undefined, doc.ceilingM),
+    position: snapPart(type, room, x, z, undefined, room.h ?? doc.ceilingM),
   };
   const others = type === "panel" ? doc.parts.filter((p) => p.type !== "panel") : doc.parts;
   return { ok: true, doc: { ...doc, parts: [...others, part] } };
@@ -189,7 +190,7 @@ export function toProject(doc: EditorDoc): Result<{ project: Project }> {
       })),
   ];
 
-  const ceiling = doc.ceilingM ?? CEILING;
+  const ceiling = routeCeiling(doc, doc.ceilingM ?? CEILING);
   const roomOf = (id: string) => doc.rooms.find((r) => r.id === id);
   const faceOf = (p: EditorPart) => {
     const r = roomOf(p.roomId);

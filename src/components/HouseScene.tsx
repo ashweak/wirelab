@@ -7,9 +7,9 @@ import { BoxGeometry as BoxGeometryImpl, CanvasTexture, Plane, Quaternion, Rayca
 import type { OrbitControls as OrbitImpl } from "three-stdlib";
 import { CEILING } from "@/data/goldenHouse";
 import { defaultFinish, FURNITURE } from "@/editor/interior";
-import { WALL_MATERIALS, WALL_OF, roomSides } from "@/editor/construction";
+import { WALL_MATERIALS, WALL_OF, roomHeight, roomSides, tileSize, wallThickness } from "@/editor/construction";
 import type { Entity } from "@/cad/geometry";
-import { PART_INFO, type FloorKind, type Furniture, type Room } from "@/editor/parts";
+import { PART_INFO, sizeScale, type FloorKind, type Furniture, type Room } from "@/editor/parts";
 import { Environment, Lightformer } from "@react-three/drei";
 import { floorTexture } from "./textures";
 import { FurnitureMesh } from "./Furniture3D";
@@ -78,6 +78,8 @@ interface Props {
   measure?: { a: [number, number]; b: [number, number] } | null;
   /** Drafted entities (visible layers only). Walls are extruded; other lines lie on the floor. */
   draft?: Entity[];
+  /** Custom device sizes by part id. */
+  sizes?: Record<string, V3>;
 }
 
 const PVC = "#e8792b";
@@ -237,11 +239,14 @@ export function Device({
   opacity,
   onClick,
   onDown,
+  size,
 }: {
   d: SceneDevice;
   tint: string;
   on: boolean;
   opacity: number;
+  /** Custom body size [w, h, d] (m). */
+  size?: V3;
   onClick?: (id: string) => void;
   onDown?: (id: string, x: number, z: number) => void;
 }) {
@@ -470,9 +475,13 @@ export function Device({
       body = null;
   }
 
+  // Custom size: scale the body in the device's own frame (wall devices turned 90° swap x/z).
+  const k = sizeScale(d.type, size);
+  const swap = Math.abs(Math.sin(d.facing)) > 0.7 && PART_INFO[d.type].mount !== "ceiling";
+  const scale: V3 = swap ? [k[2], k[1], k[0]] : k;
   return (
     <group position={d.position}>
-      {body}
+      <group scale={scale}>{body}</group>
       {/* Generous invisible hit target so small parts are easy to click. */}
       <mesh
         onClick={click}
@@ -499,13 +508,16 @@ function Walls({
   selected,
   onDown,
   render,
-  wallH,
+  wallH: cutH,
+  ceiling,
 }: {
   rooms: SceneRoom[];
   selected?: string;
   onDown?: (id: string, x: number, z: number) => void;
   render: boolean;
+  /** Cut height in a cutaway render, else the project ceiling. */
   wallH: number;
+  ceiling: number;
 }) {
   const sides = useMemo(() => roomSides(rooms as Room[]), [rooms]);
   return (
@@ -517,9 +529,11 @@ function Walls({
         const exposed = ["brick100", "plywood", "concrete150"].includes(mat.id);
         const paint = r.wall ?? (exposed ? mat.color : fin.wall);
         const side = sides[r.id] ?? { left: false, right: false, front: false, back: false };
+        const rh = roomHeight(r as Room, ceiling);
+        const wallH = cutH < ceiling ? Math.min(cutH, rh) : rh;
         // Shared walls: each room draws the half on its own side (no z-fighting, own paint).
         // Exterior walls: the full thickness, centred on the outline, with corners closed.
-        const T = mat.thickness;
+        const T = wallThickness(r as Room);
         const half = T / 2;
         const xw = (shared: boolean, x0: number, inward: number) =>
           shared ? { c: x0 + (inward * half) / 2, t: half } : { c: x0, t: T };
@@ -542,7 +556,7 @@ function Walls({
         ];
         return (
           <group key={r.id}>
-            <Floor r={r} kind={floor.kind} color={floor.color} render={render} selected={selected === r.id} onDown={onDown} />
+            <Floor r={r} kind={floor.kind} color={floor.color} tile={tileSize(r as Room)} render={render} selected={selected === r.id} onDown={onDown} />
             {walls.map((w, i) => (
               <group key={i}>
                 <mesh position={w.pos} raycast={() => null} castShadow={render} receiveShadow={render}>
@@ -573,6 +587,7 @@ function Floor({
   r,
   kind,
   color,
+  tile,
   render,
   selected,
   onDown,
@@ -580,11 +595,12 @@ function Floor({
   r: SceneRoom;
   kind: FloorKind;
   color: string;
+  tile: number | null;
   render: boolean;
   selected: boolean;
   onDown?: (id: string, x: number, z: number) => void;
 }) {
-  const map = useMemo(() => floorTexture(kind, color, r.w, r.d), [kind, color, r.w, r.d]);
+  const map = useMemo(() => floorTexture(kind, color, r.w, r.d, tile), [kind, color, r.w, r.d, tile]);
   useEffect(() => () => map.dispose(), [map]);
   return (
     <mesh
@@ -797,6 +813,7 @@ export default function HouseScene({
   cutaway = false,
   measure = null,
   draft = [],
+  sizes,
 }: Props) {
   const render = mode === "render";
   const night = render && lighting === "night";
@@ -906,7 +923,7 @@ export default function HouseScene({
         </mesh>
       )}
 
-      <Walls rooms={rooms} selected={selRoom?.id} onDown={grab(editor?.onRoomDown)} render={render} wallH={wallH} />
+      <Walls rooms={rooms} selected={selRoom?.id} onDown={grab(editor?.onRoomDown)} render={render} wallH={wallH} ceiling={ceiling} />
       {furniture.filter((f) => !(render && cutaway && FURNITURE[f.type]?.wallMount)).map((f) => (
         <FurnitureMesh
           key={f.id}
@@ -933,7 +950,9 @@ export default function HouseScene({
 
       {panel && !above(panel) && (
         <group position={panel.position} rotation={[0, panel.facing, 0]}>
-          <PanelBoard />
+          <group scale={sizeScale("panel", sizes?.[panel.id])}>
+            <PanelBoard />
+          </group>
           <mesh
             visible={false}
             onPointerDown={
@@ -1036,6 +1055,7 @@ export default function HouseScene({
           tint="#94a3b8"
           on={false}
           opacity={0.95}
+          size={sizes?.[d.id]}
           onClick={editor?.onPartClick}
           onDown={grab(editor?.onPartDown)}
         />
@@ -1100,6 +1120,7 @@ export default function HouseScene({
                   tint={tint}
                   on={!off}
                   opacity={dim ? 0.15 : 1}
+                  size={sizes?.[d.id]}
                   onClick={editor?.onPartClick}
                   onDown={grab(editor?.onPartDown)}
                 />

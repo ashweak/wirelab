@@ -115,6 +115,25 @@ export const CEILING_MATERIALS: CeilingMaterial[] = [
 ];
 
 export const WALL_OF = (r: Room) => WALL_MATERIALS.find((m) => m.id === (r.wallMat ?? "chb100")) ?? WALL_MATERIALS[0];
+/** Finished wall thickness of a room (m). */
+export const wallThickness = (r: Room) => r.wallT ?? WALL_OF(r).thickness;
+/** Floor-to-ceiling height of a room (m). */
+export const roomHeight = (r: Room, projectCeiling: number) => r.h ?? projectCeiling;
+/** Tile/plank size of a room's floor (m), or null for poured or roll finishes. */
+export function tileSize(r: Room): number | null {
+  const m = FLOOR_MATERIALS.find((x) => x.id === (r.floor?.kind ?? "tile"));
+  if (!m?.unit) return null;
+  return r.tile ?? m.unit[0];
+}
+
+/** Size limits for the properties panel (m). */
+export const DIM_LIMITS = {
+  roomH: [2.0, 12],
+  wallT: [0.05, 1],
+  tile: [0.05, 2],
+  partSide: [0.02, 3],
+  elevation: [0, 20],
+} as const;
 
 type Side = "left" | "right" | "front" | "back";
 const EPS = 1e-6;
@@ -186,41 +205,49 @@ export function estimate(doc: EditorDoc): Estimate {
     openings.set(label, (openings.get(label) ?? 0) + 1);
   }
 
-  const wallAgg = new Map<string, { area: number; run: number }>();
+  const wallAgg = new Map<string, { area: number; run: number; h: number }>();
   for (const r of doc.rooms) {
     const m = WALL_OF(r);
+    const rh = roomHeight(r, h);
     const run = runs.get(r.id) ?? 0;
-    const area = Math.max(0, run * h - (openingArea.get(r.id) ?? 0));
-    const cur = wallAgg.get(m.id) ?? { area: 0, run: 0 };
-    wallAgg.set(m.id, { area: cur.area + area, run: cur.run + run });
+    const area = Math.max(0, run * rh - (openingArea.get(r.id) ?? 0));
+    const cur = wallAgg.get(m.id) ?? { area: 0, run: 0, h: 0 };
+    wallAgg.set(m.id, { area: cur.area + area, run: cur.run + run, h: Math.max(cur.h, rh) });
   }
   // Walls drawn line by line with the WALL command.
   for (const e of doc.draft?.entities ?? []) {
     if (e.kind !== "wall") continue;
     const run = Math.hypot(e.b[0] - e.a[0], e.b[1] - e.a[1]);
     const id = WALL_MATERIALS.some((m) => m.id === e.mat) ? e.mat : "chb100";
-    const cur = wallAgg.get(id) ?? { area: 0, run: 0 };
-    wallAgg.set(id, { area: cur.area + run * h, run: cur.run + run });
+    const cur = wallAgg.get(id) ?? { area: 0, run: 0, h: 0 };
+    wallAgg.set(id, { area: cur.area + run * h, run: cur.run + run, h: Math.max(cur.h, h) });
   }
-  const walls = [...wallAgg].map(([id, { area, run }]) => {
+  const walls = [...wallAgg].map(([id, { area, run, h: wh }]) => {
     const m = WALL_MATERIALS.find((x) => x.id === id)!;
-    return { material: id, label: m.label, areaM2: c2(area), items: m.qty(area, run, h) };
+    return { material: id, label: m.label, areaM2: c2(area), items: m.qty(area, run, wh || h) };
   });
 
-  const floorAgg = new Map<string, number>();
+  // grouped by finish and tile size, so a 45 cm tile is counted apart from a 30 cm one
+  const floorAgg = new Map<string, { id: string; tile: number | null; area: number }>();
   for (const r of doc.rooms) {
     const id = r.floor?.kind ?? "tile";
-    floorAgg.set(id, (floorAgg.get(id) ?? 0) + r.w * r.d);
+    const tile = tileSize(r);
+    const key = `${id}|${tile ?? ""}`;
+    const cur = floorAgg.get(key) ?? { id, tile, area: 0 };
+    floorAgg.set(key, { ...cur, area: cur.area + r.w * r.d });
   }
-  const floors = [...floorAgg].map(([id, area]) => {
+  const floors = [...floorAgg.values()].map(({ id, tile, area }) => {
     const m = FLOOR_MATERIALS.find((x) => x.id === id) ?? FLOOR_MATERIALS[0];
+    const std = m.unit && tile !== null && Math.abs(tile - m.unit[0]) < 1e-6;
+    const unitArea = m.unit ? (std ? m.unit[0] * m.unit[1] : tile! * tile!) : 1;
+    const label = m.unit && !std ? `${m.label.replace(/\s*\d+\s*×\s*\d+.*$/, "")} ${Math.round(tile! * 100)} × ${Math.round(tile! * 100)} cm` : m.label;
     const items: QtyLine[] = m.unit
       ? [
-          { item: m.label, qty: Math.ceil((area / (m.unit[0] * m.unit[1])) * WASTE), unit: "pcs" },
+          { item: label, qty: Math.ceil((area / unitArea) * WASTE), unit: "pcs" },
           ...(m.id === "carpet" ? [] : [{ item: "Tile adhesive, 25 kg", qty: Math.ceil(area / 4), unit: "bags" }]),
         ]
       : [{ item: m.label, qty: c1(area * (m.id === "concrete" || m.id === "epoxy" ? 1 : WASTE)), unit: "m²" }];
-    return { material: id, label: m.label, areaM2: c2(area), items };
+    return { material: id, label, areaM2: c2(area), items };
   });
 
   const ceilAgg = new Map<string, number>();

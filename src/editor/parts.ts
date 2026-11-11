@@ -55,6 +55,12 @@ export interface Room {
   wallMat?: string;
   /** Ceiling system id (see CEILING_MATERIALS); gypsum when absent. */
   ceilingMat?: string;
+  /** Floor-to-ceiling height of this room (m); the project ceiling when absent. */
+  h?: number;
+  /** Finished wall thickness (m), plaster included; the wall system's when absent. */
+  wallT?: number;
+  /** Floor tile / plank size (m, square); the finish's standard size when absent. */
+  tile?: number;
 }
 
 /** Catalogue key, e.g. "bed_double" or "car_sedan" (see FURNITURE in interior.ts). */
@@ -73,6 +79,8 @@ export interface Furniture {
   d: number;
   h: number;
   color: string;
+  /** Height of its underside above the floor (m), e.g. a window sill; catalogue default when absent. */
+  y?: number;
 }
 
 export interface EditorPart {
@@ -84,6 +92,8 @@ export interface EditorPart {
   seq?: number;
   /** Custom mounting height (m) set in the properties panel. */
   height?: number;
+  /** Custom body size [width, height, depth] (m); the model's standard size when absent. */
+  size?: V3;
 }
 
 export interface Draft {
@@ -184,3 +194,40 @@ export const isLightingLoad = (t: EditorPartType) =>
   PART_INFO[t].circuit === "lighting" && !["switch", "switch_3way", "doorbell", "smoke_detector", "emergency_light"].includes(t);
 
 export const isWallPart = (t: EditorPartType) => PART_INFO[t].mount === "wall";
+
+/** Standard body size [width, height, depth] (m) of each device model, for custom sizing. */
+const MODEL_SIZE: Record<string, V3> = {
+  fixture: [0.4, 0.07, 0.4],
+  downlight: [0.18, 0.03, 0.18],
+  fan: [1.1, 0.3, 1.1],
+  exhaust: [0.28, 0.03, 0.28],
+  detector: [0.16, 0.04, 0.16],
+  sconce: [0.2, 0.2, 0.16],
+  emergency: [0.35, 0.12, 0.12],
+  camera: [0.09, 0.09, 0.2],
+  box: [0.32, 0.42, 0.14],
+  plate: [0.17, 0.25, 0.03],
+  aircon: [0.85, 0.29, 0.2],
+  heater: [0.3, 0.45, 0.12],
+  panel: [0.42, 0.55, 0.1],
+};
+
+export function nominalSize(type: EditorPartType): V3 {
+  if (type === "range_outlet") return [0.25, 0.25, 0.03];
+  return MODEL_SIZE[PART_INFO[type].model] ?? [0.2, 0.2, 0.1];
+}
+
+/** Per-axis scale of a device drawn at a custom size. */
+export function sizeScale(type: EditorPartType, size?: V3): V3 {
+  if (!size) return [1, 1, 1];
+  const n = nominalSize(type);
+  return [size[0] / n[0], size[1] / n[1], size[2] / n[2]];
+}
+
+/**
+ * Height conduit runs at: the lowest ceiling in the house, so a run never passes above a
+ * room's ceiling. `project` is the project ceiling height.
+ */
+export function routeCeiling(doc: Pick<EditorDoc, "rooms">, project: number): number {
+  return Math.min(project, ...doc.rooms.map((r) => r.h ?? Infinity));
+}

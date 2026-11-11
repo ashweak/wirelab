@@ -161,7 +161,7 @@ export function movePart(doc: EditorDoc, id: string, x: number, z: number): Resu
   const moved = {
     ...part,
     roomId: room.id,
-    position: snapPart(part.type, room, x, z, part.height, doc.ceilingM),
+    position: snapPart(part.type, room, x, z, part.height, room.h ?? doc.ceilingM),
   };
   return { ok: true, doc: { ...doc, parts: doc.parts.map((p) => (p.id === id ? moved : p)) } };
 }

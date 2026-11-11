@@ -9,6 +9,7 @@ import {
   isWallPart,
   type EditorDoc,
   type EditorPartType,
+  routeCeiling,
   type V3,
 } from "./parts";
 
@@ -203,7 +204,7 @@ export function materials(doc: EditorDoc): MaterialLine[] {
     const g = groundFor(r.breakerA);
     ground.set(g, (ground.get(g) ?? 0) + wire);
     conduitM += run;
-    const ceil = doc.ceilingM ?? CEILING;
+    const ceil = routeCeiling(doc, doc.ceilingM ?? CEILING);
     const face = (id: string, pos: V3) => {
       const p = doc.parts.find((q) => q.id === id);
       const r = doc.rooms.find((q) => q.id === p?.roomId);

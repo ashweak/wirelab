@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { WALL_OF, roomSides, FLOOR_MATERIALS } from "@/editor/construction";
+import { WALL_OF, roomSides, wallThickness, FLOOR_MATERIALS } from "@/editor/construction";
 import { FURNITURE, defaultFinish, footprint } from "@/editor/interior";
 import { PART_INFO, type EditorDoc, type EditorPartType, type V3 } from "@/editor/parts";
 import type { Schedule } from "@/engine/types";
@@ -250,7 +250,7 @@ export default function PlanView(p: Props) {
   // ---------- walls ----------
   const walls = p.doc.rooms.flatMap((r) => {
     const m = WALL_OF(r);
-    const T = m.thickness;
+    const T = wallThickness(r);
     const h = T / 2;
     const s = sides[r.id];
     const rects: { x: number; z: number; w: number; d: number; key: string }[] = [];

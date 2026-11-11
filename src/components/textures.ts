@@ -122,7 +122,7 @@ function paint(kind: FloorKind, color: string, ctx: CanvasRenderingContext2D, S:
 }
 
 /** A floor texture sized so one repeat covers TILE_M metres. */
-export function floorTexture(kind: FloorKind, color: string, w: number, d: number): Texture {
+export function floorTexture(kind: FloorKind, color: string, w: number, d: number, tileM?: number | null): Texture {
   const key = `${kind}|${color}`;
   let base = cache.get(key);
   if (!base) {
@@ -136,7 +136,9 @@ export function floorTexture(kind: FloorKind, color: string, w: number, d: numbe
     cache.set(key, base);
   }
   const t = base.clone();
-  t.repeat.set(w / TILE_M[kind], d / TILE_M[kind]);
+  // the canvas holds 4 × 4 tiles, so a custom tile size scales the repeat
+  const rep = tileM ? tileM * 4 : TILE_M[kind];
+  t.repeat.set(w / rep, d / rep);
   t.needsUpdate = true;
   return t;
 }

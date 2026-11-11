@@ -552,7 +552,7 @@ export function FurnitureMesh({
   selected: boolean;
   onDown?: (id: string, x: number, z: number) => void;
 }) {
-  const lift = FURNITURE[f.type]?.lift ?? 0;
+  const lift = f.y ?? FURNITURE[f.type]?.lift ?? 0;
   return (
     <group position={[f.x, lift, f.z]} rotation={[0, (-f.rot * Math.PI) / 180, 0]}>
       <Model f={f} />

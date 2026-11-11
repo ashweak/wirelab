@@ -44,6 +44,10 @@ import {
   WALL_PAINTS,
   addFurniture,
   ceilingOf,
+  setFurnitureElevation,
+  setPartSize,
+  setRoomDims,
+  setRoomHeight,
   defaultFinish,
   duplicateFurniture,
   moveFurniture,
@@ -54,9 +58,9 @@ import {
   setFurnitureColor,
   setRoomMaterials,
 } from "@/editor/interior";
-import { PART_TYPES, type Draft, type FloorKind, type FurnitureType, type V3 } from "@/editor/parts";
+import { PART_TYPES, nominalSize, routeCeiling, type Draft, type FloorKind, type FurnitureType, type V3 } from "@/editor/parts";
 import { ChecksView, EstimateView, H2, MaterialsTable, ScheduleTable } from "./ScheduleView";
-import { CEILING_MATERIALS, FLOOR_MATERIALS, WALL_MATERIALS, WALL_OF, estimate } from "@/editor/construction";
+import { CEILING_MATERIALS, FLOOR_MATERIALS, WALL_MATERIALS, WALL_OF, estimate, tileSize, wallThickness } from "@/editor/construction";
 import type { Corner, SceneApi, ViewMode, ViewName } from "./HouseScene";
 import { deviceFor, sceneCircuits } from "./sceneData";
 import { ViewToggle } from "./ViewToggle";
@@ -410,7 +414,7 @@ export default function Editor() {
   );
   const circuits = useMemo(
     () =>
-      built.ok && panel ? sceneCircuits(panel.position, built.project.circuits, shown.rooms, tags, ceiling, shown.routes) : [],
+      built.ok && panel ? sceneCircuits(panel.position, built.project.circuits, shown.rooms, tags, routeCeiling(shown, ceiling), shown.routes) : [],
     [built, panel, shown.rooms, tags, ceiling],
   );
   const extraChecks = useMemo(() => designChecks(doc), [doc]);
@@ -1126,6 +1130,7 @@ export default function Editor() {
         <ErrorBoundary label="The 3D view" onReset={() => setViewKind("3d")}>
         <HouseScene
           measure={measure}
+          sizes={Object.fromEntries(shown.parts.filter((q) => q.size).map((q) => [q.id, q.size!]))}
           draft={draft.entities.filter((e) => draft.layers.find((l) => l.name === e.layer)?.on !== false)}
           rooms={shown.rooms}
           panel={panel}
@@ -1712,9 +1717,41 @@ export default function Editor() {
               <Num label="Z (m)" value={selRoom.z} step={step} onCommit={(v) => apply(moveRoom(doc, selRoom.id, 0, v - selRoom.z, 0.01))} />
               <Num label="Width (m)" value={selRoom.w} step={step} onCommit={(v) => apply(resizeRoom(doc, selRoom.id, { ...selRoom, w: v }))} />
               <Num label="Depth (m)" value={selRoom.d} step={step} onCommit={(v) => apply(resizeRoom(doc, selRoom.id, { ...selRoom, d: v }))} />
+              <Num
+                label={`Height (m)${selRoom.h === undefined ? " · project" : ""}`}
+                value={selRoom.h ?? ceiling}
+                step={0.05}
+                onCommit={(v) => apply(setRoomHeight(doc, selRoom.id, v))}
+              />
+              <Num
+                label={`Wall thick. (mm)${selRoom.wallT === undefined ? " · std" : ""}`}
+                value={Math.round(wallThickness(selRoom) * 1000)}
+                step={10}
+                onCommit={(v) => apply(setRoomDims(doc, selRoom.id, { wallT: v / 1000 }))}
+              />
+              {tileSize(selRoom) !== null && (
+                <Num
+                  label={`Tile size (cm)${selRoom.tile === undefined ? " · std" : ""}`}
+                  value={Math.round(tileSize(selRoom)! * 100)}
+                  step={5}
+                  onCommit={(v) => apply(setRoomDims(doc, selRoom.id, { tile: v / 100 }))}
+                />
+              )}
+              {(selRoom.h !== undefined || selRoom.wallT !== undefined || selRoom.tile !== undefined) && (
+                <button
+                  onClick={() => {
+                    const r1 = setRoomHeight(doc, selRoom.id, undefined);
+                    if (r1.ok) apply(setRoomDims(r1.doc, selRoom.id, { wallT: null, tile: null }));
+                  }}
+                  className={`${btn(false)} self-end text-[10px]`}
+                  title="Back to project height, standard wall and tile sizes"
+                >
+                  ↺ Standard sizes
+                </button>
+              )}
             </div>
             <p className="mt-2 font-mono text-[11px] text-slate-500">
-              {(selRoom.w * selRoom.d).toFixed(1)} m² · {doc.parts.filter((p) => p.roomId === selRoom.id).length} parts ·{" "}
+              {(selRoom.w * selRoom.d).toFixed(1)} m² · {(selRoom.w * selRoom.d * (selRoom.h ?? ceiling)).toFixed(1)} m³ · {doc.parts.filter((p) => p.roomId === selRoom.id).length} parts ·{" "}
               {(doc.furniture ?? []).filter((f) => f.roomId === selRoom.id).length} furniture
             </p>
             {(() => {
@@ -1840,6 +1877,36 @@ export default function Editor() {
                 />
               </div>
             )}
+            {(() => {
+              const sz = selPart.size ?? nominalSize(selPart.type);
+              return (
+                <div className="mt-2">
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["Width", "Height", "Depth"] as const).map((lab, i) => (
+                      <Num
+                        key={lab}
+                        label={`${lab} (mm)`}
+                        value={Math.round(sz[i] * 1000)}
+                        step={10}
+                        onCommit={(v) => {
+                          const n = [...sz] as V3;
+                          n[i] = v / 1000;
+                          apply(setPartSize(doc, selPart.id, n));
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <p className="mt-1 font-mono text-[10px] text-slate-500">
+                    {selPart.size ? "custom size" : "standard size"} · 20–3000 mm
+                    {selPart.size && (
+                      <button onClick={() => apply(setPartSize(doc, selPart.id, undefined))} className="ml-2 text-sky-300 hover:underline">
+                        reset
+                      </button>
+                    )}
+                  </p>
+                </div>
+              );
+            })()}
             <div className="mt-2 flex flex-wrap gap-1.5">
               {selPart.type !== "panel" && (
                 <button onClick={() => duplicate()} className={btn(false)} title="Ctrl+D">
@@ -1870,6 +1937,22 @@ export default function Editor() {
                   onCommit={(v) => apply(resizeFurniture(doc, selFurn.id, { [k]: v }))}
                 />
               ))}
+            </div>
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              <Num
+                label="Elevation (m)"
+                value={selFurn.y ?? FURNITURE[selFurn.type].lift ?? 0}
+                step={0.05}
+                onCommit={(v) => apply(setFurnitureElevation(doc, selFurn.id, v))}
+              />
+              <p className="col-span-2 self-end pb-1 font-mono text-[10px] text-slate-500">
+                top at {((selFurn.y ?? FURNITURE[selFurn.type].lift ?? 0) + selFurn.h).toFixed(2)} m
+                {selFurn.y !== undefined && (
+                  <button onClick={() => apply(setFurnitureElevation(doc, selFurn.id, undefined))} className="ml-2 text-sky-300 hover:underline">
+                    reset
+                  </button>
+                )}
+              </p>
             </div>
             <p className="mt-1 font-mono text-[10px] text-slate-500">
               Any size: W/D {SIZE_LIMITS.w.join("–")} m · H {SIZE_LIMITS.h.join("–")} m · facing {selFurn.rot}°

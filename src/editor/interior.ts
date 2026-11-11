@@ -1,7 +1,7 @@
 import { CEILING } from "@/data/goldenHouse";
 import { FLOOR_MATERIALS } from "./floors";
 import { roomAt, snap } from "./editor";
-import { PART_INFO, type EditorDoc, type FloorKind, type Furniture, type FurnitureType, type Room } from "./parts";
+import { PART_INFO, type EditorDoc, type FloorKind, type Furniture, type FurnitureType, type Room, type V3 } from "./parts";
 
 type Result = { ok: true; doc: EditorDoc } | { ok: false; error: string };
 
@@ -369,7 +369,9 @@ export function setCeiling(doc: EditorDoc, h: number): Result {
       ...doc,
       ceilingM: h,
       parts: doc.parts.map((p) =>
-        PART_INFO[p.type].mount === "ceiling"
+        doc.rooms.find((r) => r.id === p.roomId)?.h !== undefined
+          ? p // room has its own height
+          : PART_INFO[p.type].mount === "ceiling"
           ? { ...p, position: [p.position[0], r3(h - 0.05), p.position[2]] }
           : p.position[1] > h - 0.3
             ? { ...p, position: [p.position[0], r3(h - 0.3), p.position[2]] }
@@ -380,3 +382,74 @@ export function setCeiling(doc: EditorDoc, h: number): Result {
 }
 
 export const ceilingOf = (doc: EditorDoc) => doc.ceilingM ?? CEILING;
+
+export const ROOM_HEIGHT_RANGE: [number, number] = [2.0, 12];
+
+/**
+ * Give one room its own floor-to-ceiling height (undefined = use the project's).
+ * Its ceiling lights follow; wall parts are kept 0.3 m below the new ceiling.
+ */
+export function setRoomHeight(doc: EditorDoc, roomId: string, h: number | undefined): Result {
+  if (h !== undefined && (h < ROOM_HEIGHT_RANGE[0] || h > ROOM_HEIGHT_RANGE[1]))
+    return { ok: false, error: `Room height must be ${ROOM_HEIGHT_RANGE[0]}–${ROOM_HEIGHT_RANGE[1]} m` };
+  const eff = h ?? ceilingOf(doc);
+  return {
+    ok: true,
+    doc: {
+      ...doc,
+      rooms: doc.rooms.map((r) => (r.id === roomId ? { ...r, h: h === undefined ? undefined : r3(h) } : r)),
+      parts: doc.parts.map((p) =>
+        p.roomId !== roomId
+          ? p
+          : PART_INFO[p.type].mount === "ceiling"
+            ? { ...p, position: [p.position[0], r3(eff - 0.05), p.position[2]] }
+            : p.position[1] > eff - 0.3
+              ? { ...p, position: [p.position[0], r3(eff - 0.3), p.position[2]] }
+              : p,
+      ),
+    },
+  };
+}
+
+const clampTo = (v: number, [lo, hi]: readonly [number, number]) => Math.max(lo, Math.min(hi, v));
+
+/** Wall thickness / floor tile size of a room (undefined = standard). */
+export function setRoomDims(doc: EditorDoc, roomId: string, patch: { wallT?: number | null; tile?: number | null }): Result {
+  return {
+    ok: true,
+    doc: {
+      ...doc,
+      rooms: doc.rooms.map((r) => {
+        if (r.id !== roomId) return r;
+        const n = { ...r };
+        if (patch.wallT !== undefined) n.wallT = patch.wallT === null ? undefined : r3(clampTo(patch.wallT, [0.05, 1]));
+        if (patch.tile !== undefined) n.tile = patch.tile === null ? undefined : r3(clampTo(patch.tile, [0.05, 2]));
+        return n;
+      }),
+    },
+  };
+}
+
+/** Lift a furniture item off the floor (undefined = catalogue default). */
+export function setFurnitureElevation(doc: EditorDoc, id: string, y: number | undefined): Result {
+  return {
+    ok: true,
+    doc: {
+      ...doc,
+      furniture: (doc.furniture ?? []).map((f) => (f.id === id ? { ...f, y: y === undefined ? undefined : r3(clampTo(y, [0, 20])) } : f)),
+    },
+  };
+}
+
+/** Custom body size of a device (undefined = standard). */
+export function setPartSize(doc: EditorDoc, id: string, size: V3 | undefined): Result {
+  return {
+    ok: true,
+    doc: {
+      ...doc,
+      parts: doc.parts.map((p) =>
+        p.id === id ? { ...p, size: size ? (size.map((v) => r3(clampTo(v, [0.02, 3]))) as V3) : undefined } : p,
+      ),
+    },
+  };
+}
