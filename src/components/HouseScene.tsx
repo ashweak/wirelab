@@ -555,7 +555,7 @@ function Walls({
                 </mesh>
                 <mesh position={[w.pos[0], wallH + 0.005, w.pos[2]]} raycast={() => null}>
                   <boxGeometry args={[w.size[0], 0.01, w.size[2]]} />
-                  <meshStandardMaterial color={render ? "#3b3f45" : "#b9b09d"} />
+                  <meshStandardMaterial color={render ? "#3b3f45" : paint} />
                 </mesh>
               </group>
             ))}
@@ -677,10 +677,12 @@ function Interaction({
   editor,
   controls,
   rooms,
+  renderOn,
 }: {
   editor?: EditorHooks;
   controls: MutableRefObject<OrbitImpl | null>;
   rooms: SceneRoom[];
+  renderOn: boolean;
 }) {
   const { camera, gl, scene } = useThree();
   const roomsRef = useRef(rooms);
@@ -731,6 +733,23 @@ function Interaction({
       },
     };
   }, [editor?.apiRef, floorAt, camera, controls, gl, scene]);
+
+  // Entering a cutaway render from a low camera would show only the outside of the walls:
+  // lift the camera to at least 40° above the floor, keeping its direction and distance.
+  useEffect(() => {
+    if (!renderOn) return;
+    const c = controls.current;
+    if (!c) return;
+    const off = camera.position.clone().sub(c.target);
+    const dist = off.length();
+    const flat = Math.hypot(off.x, off.z) || 1;
+    const elev = Math.atan2(off.y, flat);
+    const MIN = (40 * Math.PI) / 180;
+    if (elev >= MIN) return;
+    const k = (dist * Math.cos(MIN)) / flat;
+    camera.position.set(c.target.x + off.x * k, c.target.y + dist * Math.sin(MIN), c.target.z + off.z * k);
+    c.update();
+  }, [renderOn, camera, controls]);
 
   const dragging = editor?.dragging;
   const dragY = editor?.dragY ?? 0;
@@ -898,7 +917,7 @@ export default function HouseScene({
       ))}
       {selRoom && <SelectedRoom r={selRoom} onHandleDown={grab(editor?.onHandleDown)} />}
       {selPart && <SelectedPart position={selPart.position} />}
-      <Interaction editor={editor} controls={controls} rooms={rooms} />
+      <Interaction editor={editor} controls={controls} rooms={rooms} renderOn={render && cutaway} />
 
       {editor?.preview && (
         <mesh
